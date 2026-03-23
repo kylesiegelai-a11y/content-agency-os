@@ -25,8 +25,35 @@ export default function SystemSettings({ token, killSwitchEnabled, onKillSwitchC
       if (!response.ok) throw new Error('Failed to fetch settings')
 
       const data = await response.json()
-      // Validate response has expected structure, otherwise use mock
-      const settings = (data && data.agents) ? data : getMockSettings()
+      // Map backend response shape to what the UI expects
+      let mappedSettings
+      if (data?.settings) {
+        mappedSettings = {
+          config: {
+            killSwitch: data.settings.killSwitch,
+            mockMode: data.settings.mockMode
+          },
+          mockMode: data.settings.mockMode,
+          version: '1.0.0',
+          redis: { connected: !data.settings.mockMode },
+          agents: Object.entries(data.settings.agentPauseStates || {}).map(([id, paused]) => ({
+            id,
+            name: id.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()),
+            description: `Agent: ${id}`,
+            enabled: !paused
+          })),
+          schedulerTasks: data.settings.schedulerTasks || [],
+          prompts: getMockSettings().prompts,
+          apiKeys: getMockSettings().apiKeys
+        }
+        // If no agents returned from backend, use mock agents list
+        if (mappedSettings.agents.length === 0) {
+          mappedSettings.agents = getMockSettings().agents
+        }
+      } else {
+        mappedSettings = getMockSettings()
+      }
+      const settings = mappedSettings
       setSettings(settings)
       setConfigJson(JSON.stringify(settings.config, null, 2))
 
@@ -60,13 +87,13 @@ export default function SystemSettings({ token, killSwitchEnabled, onKillSwitchC
     try {
       const parsed = JSON.parse(configJson)
 
-      const response = await fetch('/api/settings/config', {
-        method: 'PUT',
+      const response = await fetch('/api/settings', {
+        method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ config: parsed }),
+        body: JSON.stringify(parsed),
       })
 
       if (!response.ok) throw new Error('Failed to save configuration')
@@ -83,13 +110,13 @@ export default function SystemSettings({ token, killSwitchEnabled, onKillSwitchC
     setAgentStates({ ...agentStates, [agentId]: newState })
 
     try {
-      await fetch(`/api/agents/${agentId}/toggle`, {
-        method: 'POST',
+      await fetch(`/api/settings/agents/${agentId}`, {
+        method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ enabled: newState }),
+        body: JSON.stringify({ paused: !newState }),
       })
     } catch (err) {
       console.error('Failed to toggle agent:', err)

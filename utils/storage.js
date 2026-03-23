@@ -273,4 +273,15 @@ class Storage {
   }
 }
 
-module.exports = new Storage(process.env.DATABASE_PATH || './data');
+const storage = new Storage(process.env.DATABASE_PATH || './data');
+
+// Export both the instance and compatibility helpers matching agent import pattern
+module.exports = storage;
+module.exports.storage = storage;
+module.exports.readData = (fileName) => storage.read(fileName);
+module.exports.writeData = (fileName, data) => storage.write(fileName, data);
+module.exports.appendToArray = (fileName, item) => storage.append(fileName, item);
+module.exports.findById = (fileName, id, idField) => storage.findById(fileName, id, idField);
+module.exports.updateById = (fileName, id, updates, idField) => storage.updateById(fileName, id, updates, idField);
+module.exports.deleteById = (fileName, id, idField) => storage.deleteById(fileName, id, idField);
+module.exports.listData = (fileName, filter) => storage.list(fileName, filter);

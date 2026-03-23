@@ -6,6 +6,18 @@
 const fs = require('fs');
 const path = require('path');
 
+// Explicit agent module registry — maps route names to actual file exports
+const AGENT_MODULES = {
+  qualifier: require('./agents/opportunityScorer'),
+  briefer: require('./agents/clientBrief'),
+  writer: require('./agents/writer'),
+  editor: require('./agents/editor'),
+  humanizer: require('./agents/humanization'),
+  qa: require('./agents/qualityGate'),
+  delivery: require('./agents/delivery'),
+  prospector: require('./agents/coldOutreach')
+};
+
 // Job state machine definition
 const JOB_STATES = {
   // Discovery and Qualification
@@ -92,30 +104,74 @@ class Orchestrator {
   }
 
   /**
-   * Load agent module dynamically
+   * Load agent module from registry
    */
   async loadAgent(agentName) {
-    if (this.agents[agentName]) {
-      return this.agents[agentName];
-    }
+    if (this.agents[agentName]) return this.agents[agentName];
 
-    try {
-      const agentPath = path.join(__dirname, 'agents', `${agentName}Agent.js`);
-      if (!fs.existsSync(agentPath)) {
-        console.warn(`[Orchestrator] Agent not found: ${agentPath}, using null agent`);
-        this.agents[agentName] = null;
-        return null;
-      }
-
-      const Agent = require(agentPath);
-      this.agents[agentName] = new Agent();
-      console.log(`[Orchestrator] Loaded agent: ${agentName}`);
-      return this.agents[agentName];
-    } catch (error) {
-      console.error(`[Orchestrator] Failed to load agent ${agentName}: ${error.message}`);
-      this.agents[agentName] = null;
+    const agent = AGENT_MODULES[agentName];
+    if (!agent) {
+      console.warn(`[Orchestrator] Unknown agent: ${agentName}`);
       return null;
     }
+
+    this.agents[agentName] = agent;
+    console.log(`[Orchestrator] Loaded agent: ${agentName}`);
+    return agent;
+  }
+
+  /**
+   * Process a job — load agent, execute, advance state
+   */
+  async processJob(jobRecord) {
+    const job = jobRecord.data || jobRecord;
+    const agentName = AGENT_ROUTES[job.state];
+    if (!agentName) throw new Error(`No agent route for state ${job.state}`);
+
+    const agent = await this.loadAgent(agentName);
+    if (!agent) throw new Error(`Agent ${agentName} not available`);
+
+    console.log(`[Orchestrator] Processing job ${job.id} in state ${job.state} with agent ${agentName}`);
+    const result = await agent(job, { orchestrator: this });
+
+    // Determine next state
+    const NEXT_STATE = {
+      DISCOVERED: JOB_STATES.SCORED,
+      SCORED: JOB_STATES.APPROVED,
+      APPROVED: JOB_STATES.BRIEFED,
+      BRIEFED: JOB_STATES.WRITING,
+      WRITING: JOB_STATES.EDITING,
+      EDITING: JOB_STATES.HUMANIZING,
+      HUMANIZING: JOB_STATES.QUALITY_CHECK,
+      QUALITY_CHECK: JOB_STATES.APPROVED_CONTENT,
+      APPROVED_CONTENT: JOB_STATES.DELIVERING,
+      DELIVERING: JOB_STATES.DELIVERED,
+      DELIVERED: JOB_STATES.CLOSED
+    };
+
+    const nextState = NEXT_STATE[job.state];
+    if (!nextState) return result;
+
+    await this.transitionJob(job, nextState, result);
+
+    // Persist job state to storage
+    try {
+      const { writeData, readData } = require('./utils/storage');
+      let jobsData = await readData('jobs.json');
+      if (!jobsData) jobsData = { jobs: [] };
+      const jobs = jobsData.jobs || [];
+      const idx = jobs.findIndex(j => j.id === job.id);
+      if (idx >= 0) {
+        jobs[idx] = job;
+      } else {
+        jobs.push(job);
+      }
+      await writeData('jobs.json', { jobs });
+    } catch (persistErr) {
+      console.warn(`[Orchestrator] Could not persist job state: ${persistErr.message}`);
+    }
+
+    return result;
   }
 
   /**
@@ -154,6 +210,7 @@ class Orchestrator {
 
     try {
       await queue.add(job, {
+        jobId: job.id,
         priority: priorityScore,
         attempts: this.maxRetries,
         backoff: {

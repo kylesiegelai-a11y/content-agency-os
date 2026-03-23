@@ -106,48 +106,26 @@ async function delivery(job, context = {}) {
       }
     }
 
-    // Generate DOCX version (basic format)
+    // DOCX generation — requires 'docx' package (not yet implemented)
     if (formats.includes('docx')) {
-      const docxFile = path.join(dataDir, `${jobId}_${content.title?.replace(/\s+/g, '_')}.docx`);
-
-      // Create minimal DOCX structure (simplified, real implementation would use docx library)
-      const docxContent = JSON.stringify({
-        title: content.title,
-        body: content.body,
-        createdAt: new Date().toISOString()
-      });
-
-      fs.writeFileSync(docxFile, docxContent);
-
       deliveryResults.push({
         format: 'docx',
-        filename: path.basename(docxFile),
-        path: docxFile,
-        size: docxContent.length,
-        url: `file://${docxFile}`
+        status: 'unsupported',
+        error: 'DOCX generation not implemented yet. Install "docx" package to enable.'
       });
 
-      logger.info(`[delivery] DOCX file generated: ${path.basename(docxFile)}`);
+      logger.warn(`[delivery] DOCX format requested but not yet implemented for job ${jobId}`);
     }
 
-    // Generate PDF version
+    // PDF generation — requires 'pdfkit' package (not yet implemented)
     if (formats.includes('pdf')) {
-      const pdfFile = path.join(dataDir, `${jobId}_${content.title?.replace(/\s+/g, '_')}.pdf`);
-
-      // Create minimal PDF (simplified, real implementation would use pdf library)
-      const pdfContent = `%PDF-1.4\n%${content.title || 'Document'}\n${content.body}\n%%EOF`;
-
-      fs.writeFileSync(pdfFile, pdfContent);
-
       deliveryResults.push({
         format: 'pdf',
-        filename: path.basename(pdfFile),
-        path: pdfFile,
-        size: pdfContent.length,
-        url: `file://${pdfFile}`
+        status: 'unsupported',
+        error: 'PDF generation not implemented yet. Install "pdfkit" package to enable.'
       });
 
-      logger.info(`[delivery] PDF file generated: ${path.basename(pdfFile)}`);
+      logger.warn(`[delivery] PDF format requested but not yet implemented for job ${jobId}`);
     }
 
     // Get prompt manager for tracking

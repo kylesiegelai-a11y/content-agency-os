@@ -27,9 +27,9 @@ class InMemoryQueue {
   }
 
   async add(data, options = {}) {
-    const jobId = ++this.jobId;
+    const queueJobId = options.jobId || data.id || ++this.jobId;
     const job = {
-      id: jobId,
+      id: queueJobId,
       data,
       state: 'waiting',
       progress: 0,
@@ -43,7 +43,7 @@ class InMemoryQueue {
       failedReason: null
     };
 
-    this.jobs.set(jobId, job);
+    this.jobs.set(queueJobId, job);
 
     // If there are processors and no delay, process immediately
     if (this.processors.length > 0 && job.delay === 0) {

@@ -20,9 +20,14 @@ const { Scheduler } = require('./scheduler');
 
 // Configuration
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-key-change-in-production';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? 'mock-dev-secret' : null);
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
 const MOCK_ADMIN_TOKEN = 'mock-jwt-token-for-development';
+
+// Fail fast in production mode without required secrets
+if (!MOCK_MODE && !JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is required in production mode');
+}
 
 // Application state
 const appState = {
@@ -44,7 +49,10 @@ app.use(helmet());
 app.use(morgan('combined'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN?.split(',') || (MOCK_MODE ? true : false),
+  credentials: true
+}));
 
 // JWT Middleware
 const authenticateToken = (req, res, next) => {
@@ -57,6 +65,7 @@ const authenticateToken = (req, res, next) => {
 
   // Allow mock token in development
   if (MOCK_MODE && token === MOCK_ADMIN_TOKEN) {
+    req.user = { role: 'admin', mock: true };
     return next();
   }
 
@@ -878,8 +887,20 @@ app.post('/api/dead-letter-queue/:jobId/retry', authenticateToken, async (req, r
 // STATIC FILE SERVING
 // ============================================================================
 
+// Serve built dashboard if available, fall back to raw dashboard for dev
+const dashboardDist = path.join(__dirname, 'dashboard', 'dist');
 const dashboardPath = path.join(__dirname, 'dashboard');
-if (fs.existsSync(dashboardPath)) {
+
+if (fs.existsSync(dashboardDist)) {
+  console.log('[Server] Serving built dashboard from dashboard/dist');
+  app.use(express.static(dashboardDist));
+
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(dashboardDist, 'index.html'));
+  });
+} else if (fs.existsSync(dashboardPath)) {
+  console.log('[Server] Serving raw dashboard (run "npm run dashboard:build" for production)');
   app.use(express.static(dashboardPath));
 
   app.get('/', (req, res) => {
@@ -926,6 +947,16 @@ async function startServer() {
     appState.orchestrator = new Orchestrator(appState.queues, {
       maxRetries: process.env.MAX_RETRIES || 3
     });
+
+    // Register queue processors — this wires queues to the orchestrator
+    console.log('[Server] Registering queue processors...');
+    for (const [name, queue] of Object.entries(appState.queues)) {
+      queue.process(async (job) => {
+        console.log(`[Queue:${name}] Processing job ${job.data?.id || job.id}`);
+        return appState.orchestrator.processJob(job);
+      });
+      console.log(`[Server] Processor registered for queue: ${name}`);
+    }
 
     // Initialize scheduler
     console.log('[Server] Initializing scheduler...');

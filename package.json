@@ -8,6 +8,8 @@
     "dev": "MOCK_MODE=true nodemon server.js",
     "test": "jest",
     "lint": "eslint .",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "build": "npm run dashboard:build",
     "kill-switch": "curl -X POST http://localhost:3001/api/settings/kill-switch -H 'Authorization: Bearer mock-jwt-token-for-development' -H 'Content-Type: application/json' -d '{\"enabled\": true}'"
   },
   "keywords": [
