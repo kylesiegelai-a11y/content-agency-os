@@ -37,12 +37,15 @@ The server will start on `http://localhost:3001`
 
 ### 1. Get Authentication Token
 
-In development with mock mode, you can use this token directly:
+In mock mode, two auth methods work out of the box:
+
+**Option A — Hardcoded mock token** (skip login entirely):
 ```
-Token: mock-jwt-token-for-development
+Authorization: Bearer mock-jwt-token-for-development
 ```
 
-Or login to get a real JWT token:
+**Option B — Login with default mock password** (auto-created on first request):
+The default mock password is `admin123`. On first login attempt, mock mode auto-creates the auth store if it doesn't exist.
 ```bash
 curl -X POST http://localhost:3001/api/auth/login \
   -H "Content-Type: application/json" \

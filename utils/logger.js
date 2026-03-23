@@ -2,8 +2,10 @@ const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
 
+const isTestEnv = process.env.NODE_ENV === 'test';
+
 const logsDir = './logs';
-if (!fs.existsSync(logsDir)) {
+if (!isTestEnv && !fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
@@ -46,29 +48,32 @@ const consoleTransport = new winston.transports.Console({
   level: process.env.LOG_LEVEL || 'info'
 });
 
-const fileTransport = new winston.transports.File({
-  filename: path.join(logsDir, 'app.log'),
-  format: format,
-  maxsize: 5242880,
-  maxFiles: 5,
-  level: process.env.LOG_LEVEL || 'info'
-});
+// Build transport list — skip file transports in test environment
+// to avoid holding open file handles that prevent Jest from exiting cleanly
+const transports = [consoleTransport];
 
-const errorFileTransport = new winston.transports.File({
-  filename: path.join(logsDir, 'error.log'),
-  format: format,
-  maxsize: 5242880,
-  maxFiles: 5,
-  level: 'error'
-});
+if (!isTestEnv) {
+  transports.push(
+    new winston.transports.File({
+      filename: path.join(logsDir, 'app.log'),
+      format: format,
+      maxsize: 5242880,
+      maxFiles: 5,
+      level: process.env.LOG_LEVEL || 'info'
+    }),
+    new winston.transports.File({
+      filename: path.join(logsDir, 'error.log'),
+      format: format,
+      maxsize: 5242880,
+      maxFiles: 5,
+      level: 'error'
+    })
+  );
+}
 
 const logger = winston.createLogger({
   levels: logLevels,
-  transports: [
-    consoleTransport,
-    fileTransport,
-    errorFileTransport
-  ]
+  transports
 });
 
 module.exports = {

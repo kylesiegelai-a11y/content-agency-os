@@ -54,7 +54,8 @@ Each agent's mock output matches the schema its consumer expects:
 DISCOVERED → SCORED → APPROVED → BRIEFED → WRITING → EDITING →
 HUMANIZING → QUALITY_CHECK → APPROVED_CONTENT → DELIVERING → DELIVERED
 ```
-- **Terminal state**: `DELIVERED` (no CLOSED in active pipeline)
+- **Content pipeline terminal state**: `DELIVERED`
+- **Prospect pipeline terminal state**: `CLOSED`
 - **Error states**: `FAILED` → `DEAD_LETTER`
 - Transition guards in `orchestrator._validateAgentOutput()` catch malformed output before state advance
 

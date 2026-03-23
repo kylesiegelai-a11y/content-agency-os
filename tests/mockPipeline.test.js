@@ -394,13 +394,13 @@ describe('Content Agency OS - Full Pipeline Smoke Test', () => {
       expect(ledgerEntry.status).toBe('COMPLETED');
     });
 
-    test('Should close job and transition to CLOSED', async () => {
+    test('Should verify job reached DELIVERED terminal state', async () => {
       const { JOB_STATES } = require('../orchestrator');
 
       const jobClosure = {
         jobId: testJobId,
-        state: JOB_STATES.CLOSED,
-        closedAt: new Date(),
+        state: JOB_STATES.DELIVERED,
+        deliveredAt: new Date(),
         completionStatus: 'success',
         finalMetrics: {
           totalTokens: 2000,
@@ -411,7 +411,7 @@ describe('Content Agency OS - Full Pipeline Smoke Test', () => {
         }
       };
 
-      expect(jobClosure.state).toBe(JOB_STATES.CLOSED);
+      expect(jobClosure.state).toBe(JOB_STATES.DELIVERED);
       expect(jobClosure.completionStatus).toBe('success');
       expect(jobClosure.finalMetrics.timeElapsed).toBeLessThan(60);
     });
@@ -517,7 +517,7 @@ describe('Content Agency OS - Full Pipeline Smoke Test', () => {
         [JOB_STATES.QUALITY_CHECK]: [JOB_STATES.APPROVED_CONTENT],
         [JOB_STATES.APPROVED_CONTENT]: [JOB_STATES.DELIVERING],
         [JOB_STATES.DELIVERING]: [JOB_STATES.DELIVERED],
-        [JOB_STATES.DELIVERED]: [JOB_STATES.CLOSED]
+        [JOB_STATES.DELIVERED]: [] // Terminal state — no further transitions
       };
 
       Object.entries(validTransitions).forEach(([fromState, toStates]) => {

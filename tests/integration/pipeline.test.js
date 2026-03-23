@@ -11,7 +11,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
       const jobId = 'integration_001';
       const transitions = [];
 
-      // Simulate transition sequence
+      // Simulate content pipeline transition sequence — DELIVERED is terminal
       const pipeline = [
         JOB_STATES.DISCOVERED,
         JOB_STATES.SCORED,
@@ -23,8 +23,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
         JOB_STATES.QUALITY_CHECK,
         JOB_STATES.APPROVED_CONTENT,
         JOB_STATES.DELIVERING,
-        JOB_STATES.DELIVERED,
-        JOB_STATES.CLOSED
+        JOB_STATES.DELIVERED
       ];
 
       let currentState = pipeline[0];
@@ -39,7 +38,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
       }
 
       expect(transitions).toHaveLength(pipeline.length - 1);
-      expect(transitions[transitions.length - 1].to).toBe(JOB_STATES.CLOSED);
+      expect(transitions[transitions.length - 1].to).toBe(JOB_STATES.DELIVERED);
     });
 
     test('Should transition through prospect/pitch pipeline', async () => {
@@ -597,7 +596,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
           verified: true
         },
         {
-          checkpoint: 'CLOSED',
+          checkpoint: 'DELIVERED',
           timestamp: new Date(Date.now() + 2000),
           verified: true
         }
@@ -614,7 +613,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
     test('Should verify job completion', async () => {
       const completedJob = {
         jobId: 'e2e_complete_001',
-        state: JOB_STATES.CLOSED,
+        state: JOB_STATES.DELIVERED,
         completionStatus: 'success',
         completedAt: new Date(),
         results: {
@@ -625,7 +624,7 @@ describe('Content Agency OS - Pipeline Integration Tests', () => {
         }
       };
 
-      expect(completedJob.state).toBe(JOB_STATES.CLOSED);
+      expect(completedJob.state).toBe(JOB_STATES.DELIVERED);
       expect(completedJob.completionStatus).toBe('success');
 
       const allResultsPassed = Object.values(completedJob.results).every(

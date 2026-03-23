@@ -29,11 +29,11 @@ Master routing brain that manages job state transitions and agent routing.
 
 **Job State Machine:**
 ```
+Content pipeline (terminal state: DELIVERED):
 DISCOVERED → SCORED → APPROVED → BRIEFED → WRITING → EDITING →
-HUMANIZING → QUALITY_CHECK → APPROVED_CONTENT → DELIVERING →
-DELIVERED → CLOSED
+HUMANIZING → QUALITY_CHECK → APPROVED_CONTENT → DELIVERING → DELIVERED
 
-Alternative pipeline:
+Prospect pipeline (terminal state: CLOSED):
 PROSPECT_APPROVED → PROPOSAL_WRITING → PROPOSAL_REVIEW → PITCHED → CLOSED
 
 Failure path:
@@ -139,7 +139,7 @@ Bull queue configuration with intelligent mock mode fallback.
 - `GET /api/system/status` - System health and status (uptime, mode, queues, dead letter)
 
 ### Portfolio & Clients
-- `GET /api/portfolio` - Completed content library (DELIVERED, CLOSED jobs)
+- `GET /api/portfolio` - Completed content library (terminal-state jobs)
 - `GET /api/clients` - List all clients
 
 ### Settings & Configuration

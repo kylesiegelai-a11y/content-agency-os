@@ -104,6 +104,16 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     // Read the bcrypt hash from data/auth.json
     const authFilePath = path.join(__dirname, 'data', 'auth.json');
+
+    // In mock mode, auto-bootstrap a mock admin credential if auth data is absent
+    if (!fs.existsSync(authFilePath) && MOCK_MODE) {
+      const dataDir = path.dirname(authFilePath);
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      const mockHash = await bcrypt.hash('admin123', 10);
+      fs.writeFileSync(authFilePath, JSON.stringify({ masterPassword: mockHash }, null, 2));
+      console.log('[Auth] Mock mode: auto-created auth.json with default password (admin123)');
+    }
+
     if (!fs.existsSync(authFilePath)) {
       return res.status(500).json({ error: 'Password not initialized. Run: node scripts/initPassword.js' });
     }
@@ -185,7 +195,7 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
  */
 app.get('/api/jobs', authenticateToken, async (req, res) => {
   try {
-    const { state, limit = 50 } = req.query;
+    const { state, status, limit = 50, sort = 'recent' } = req.query;
 
     // Use jobs.json as the canonical job store (written by orchestrator._persistJob)
     const { readData } = require('./utils/storage');
@@ -193,13 +203,33 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     if (!jobsData) jobsData = { jobs: [] };
     let jobs = jobsData.jobs || [];
 
-    // Filter by workflow state if requested
+    // Filter by workflow state if requested (e.g. ?state=WRITING)
     if (state) {
       jobs = jobs.filter(j => j.state === state);
     }
 
+    // Filter by status category: active, completed, failed
+    const terminalStates = ['DELIVERED', 'CLOSED'];
+    const failedStates = ['FAILED', 'DEAD_LETTER'];
+    if (status === 'active') {
+      jobs = jobs.filter(j => !terminalStates.includes(j.state) && !failedStates.includes(j.state));
+    } else if (status === 'completed') {
+      jobs = jobs.filter(j => terminalStates.includes(j.state));
+    } else if (status === 'failed') {
+      jobs = jobs.filter(j => failedStates.includes(j.state));
+    }
+
+    // Sort: 'recent' (default) puts newest first; 'oldest' reverses
+    jobs.sort((a, b) => {
+      const timeA = new Date(a.lastTransition?.timestamp || a.createdAt || 0).getTime();
+      const timeB = new Date(b.lastTransition?.timestamp || b.createdAt || 0).getTime();
+      return sort === 'oldest' ? timeA - timeB : timeB - timeA;
+    });
+
     // Apply limit
-    jobs = jobs.slice(0, parseInt(limit, 10));
+    const parsedLimit = parseInt(limit, 10);
+    const totalBeforeLimit = jobs.length;
+    jobs = jobs.slice(0, parsedLimit);
 
     // Enrich with queue stats
     const stats = await appState.orchestrator.getQueueStats();
@@ -212,12 +242,19 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
         title: j.title || j.topic || '',
         priority: j.priority || 0,
         createdAt: j.createdAt,
+        updatedAt: j.lastTransition?.timestamp || j.createdAt || null,
         completedAt: j.completedAt || null,
         completionStatus: j.completionStatus || null,
         retryCount: j.retryCount || 0,
-        lastTransition: j.lastTransition || null
+        lastError: j.lastError || null,
+        lastTransition: j.lastTransition ? {
+          from: j.lastTransition.from,
+          to: j.lastTransition.to,
+          at: j.lastTransition.timestamp
+        } : null
       })),
-      total: jobs.length,
+      total: totalBeforeLimit,
+      returned: jobs.length,
       stats
     });
   } catch (error) {
