@@ -145,9 +145,9 @@ function createNewTokenTracker() {
   return globalTokenTracker;
 }
 
-module.exports = {
-  TokenTracker,
-  getTokenTracker,
-  createNewTokenTracker,
-  MODEL_PRICING
-};
+// Export both as named and as default for compatibility with tests that do `new TokenTracker()`
+module.exports = TokenTracker;
+module.exports.TokenTracker = TokenTracker;
+module.exports.getTokenTracker = getTokenTracker;
+module.exports.createNewTokenTracker = createNewTokenTracker;
+module.exports.MODEL_PRICING = MODEL_PRICING;

@@ -168,6 +168,81 @@ Looking forward to working with you!`,
       "Consider strategic partnerships",
       "Invest in automation capabilities"
     ]
+  },
+
+  brief: {
+    projectTitle: "Content Strategy Development",
+    overview: "Develop a comprehensive content strategy including blog posts, whitepapers, and case studies targeting B2B decision-makers in the SaaS industry.",
+    objectives: [
+      "Increase organic traffic by 40% within 6 months",
+      "Generate 50+ qualified leads per month through content",
+      "Establish thought leadership in the target niche"
+    ],
+    targetAudience: "B2B SaaS decision-makers, CTOs, and VP-level engineering leaders at mid-market companies (100-1000 employees)",
+    keyTopics: [
+      "AI-powered automation workflows",
+      "DevOps best practices",
+      "Cloud infrastructure optimization",
+      "Engineering team productivity"
+    ],
+    toneAndStyle: "Professional yet approachable, data-driven with actionable insights, thought-leadership positioning",
+    deliverables: [
+      { type: "blog_post", wordCount: 1500, deadline: "2024-04-15" },
+      { type: "whitepaper", wordCount: 3000, deadline: "2024-05-01" },
+      { type: "case_study", wordCount: 2000, deadline: "2024-05-15" }
+    ],
+    successMetrics: [
+      "Organic traffic growth rate",
+      "Content engagement rate (time on page, scroll depth)",
+      "Lead conversion rate from content",
+      "Social sharing and backlink acquisition"
+    ]
+  },
+
+  editor: {
+    overall_quality: 8.7,
+    edits_made: 12,
+    categories: { grammar: 3, clarity: 5, style: 2, structure: 2 },
+    improved_content: "The edited and improved version of the content with all suggested changes applied.",
+    suggestions: [
+      "Strengthen the opening paragraph hook",
+      "Add transition sentences between sections",
+      "Include more specific data points"
+    ]
+  },
+
+  humanizer: {
+    humanized_content: "The humanized version of the content with natural language patterns, varied sentence structure, and conversational elements added.",
+    changes_made: 8,
+    readability_score: 72,
+    ai_detection_score: 15,
+    techniques_applied: ["varied sentence length", "added colloquialisms", "natural transitions", "personal anecdotes"]
+  },
+
+  qa: {
+    passed: true,
+    overall_score: 87,
+    checks: {
+      grammar: { score: 95, issues: 1 },
+      factual_accuracy: { score: 88, issues: 2 },
+      brand_alignment: { score: 90, issues: 0 },
+      seo_optimization: { score: 82, issues: 3 },
+      readability: { score: 85, issues: 1 }
+    },
+    recommendations: [
+      "Verify statistic in paragraph 3",
+      "Consider adding alt text to images",
+      "Strengthen meta description"
+    ]
+  },
+
+  outreach: {
+    subject: "Quick question about your content strategy",
+    body: "Hi there,\n\nI noticed your recent blog post on DevOps automation — great insights on CI/CD pipeline optimization.\n\nWe help SaaS companies like yours scale their content output while maintaining quality. Would you be open to a quick 15-minute chat this week?\n\nBest regards",
+    follow_up_sequence: [
+      { day: 3, subject: "Following up on content strategy" },
+      { day: 7, subject: "One more thought on scaling content" }
+    ]
   }
 };
 
@@ -213,18 +288,18 @@ function createApiResponse(text, model = 'claude-3-5-sonnet-20241022', stopReaso
 function getMockContentByType(type) {
   const lowerType = (type || 'default').toLowerCase();
 
-  switch (lowerType) {
-    case 'writer':
-      return mockContent.writer;
-    case 'proposal':
-      return mockContent.proposal;
-    case 'scorer':
-      return JSON.stringify(mockContent.scorer, null, 2);
-    case 'researcher':
-      return JSON.stringify(mockContent.researcher, null, 2);
-    default:
-      return mockContent.writer;
+  // Return JSON string for structured types, plain text for content types
+  const jsonTypes = ['scorer', 'researcher', 'brief', 'editor', 'humanizer', 'qa', 'outreach'];
+
+  if (mockContent[lowerType]) {
+    if (jsonTypes.includes(lowerType)) {
+      return JSON.stringify(mockContent[lowerType], null, 2);
+    }
+    return mockContent[lowerType];
   }
+
+  // Default fallback
+  return mockContent.writer;
 }
 
 /**

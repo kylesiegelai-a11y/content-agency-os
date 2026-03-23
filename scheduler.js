@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
+const storage = require('./utils/storage');
 
 class Scheduler extends EventEmitter {
   constructor(orchestrator, config = {}) {
@@ -457,42 +458,10 @@ class Scheduler extends EventEmitter {
       ...details
     };
 
-    try {
-      let activities = [];
-
-      // Read existing activities if file exists
-      if (fs.existsSync(this.activityLogFile)) {
-        try {
-          const content = fs.readFileSync(this.activityLogFile, 'utf8');
-          activities = JSON.parse(content);
-        } catch (e) {
-          activities = [];
-        }
-      }
-
-      // Add new entry
-      activities.push(entry);
-
-      // Keep last 10000 entries
-      if (activities.length > 10000) {
-        activities = activities.slice(-10000);
-      }
-
-      // Ensure directory exists
-      const dir = path.dirname(this.activityLogFile);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      // Write activities to file
-      fs.writeFileSync(
-        this.activityLogFile,
-        JSON.stringify(activities, null, 2),
-        'utf8'
-      );
-    } catch (error) {
+    // Use the shared storage module for consistent access to activity.json
+    storage.append('activity.json', entry).catch(error => {
       console.error(`[Scheduler] Failed to log activity: ${error.message}`);
-    }
+    });
   }
 
   /**

@@ -4,33 +4,11 @@ const fsPromises = fs.promises;
 const { v4: uuidv4 } = require('uuid');
 const logger = require('./logger');
 
-// Simple file locking mechanism using atomic writes
-class FileLock {
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.lockFile = `${filePath}.lock`;
-    this.lockTimeout = 5000; // 5 seconds
-  }
-
-  async acquire() {
-    const startTime = Date.now();
-    while (fs.existsSync(this.lockFile)) {
-      if (Date.now() - startTime > this.lockTimeout) {
-        throw new Error(`Lock timeout for ${this.filePath}`);
-      }
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    await fsPromises.writeFile(this.lockFile, process.pid.toString());
-  }
-
-  async release() {
-    try {
-      await fsPromises.unlink(this.lockFile);
-    } catch (err) {
-      logger.debug(`Lock file already removed: ${this.lockFile}`);
-    }
-  }
-}
+// No file locking needed — this is a single-process Node.js app where all
+// async I/O is serialized through the event loop. The previous FileLock
+// implementation caused deadlocks from stale .lock files and re-entrant
+// acquire attempts (e.g. append → read → write all trying to lock the
+// same file).
 
 class Storage {
   constructor(dataDir = './data') {
@@ -64,10 +42,7 @@ class Storage {
 
   async read(fileName) {
     const filePath = this.getFilePath(fileName);
-    const lock = new FileLock(filePath);
-
     try {
-      await lock.acquire();
       if (!fs.existsSync(filePath)) {
         logger.warn(`File not found: ${fileName}`);
         return null;
@@ -77,17 +52,12 @@ class Storage {
     } catch (err) {
       logger.error(`Error reading ${fileName}`, err);
       throw err;
-    } finally {
-      await lock.release();
     }
   }
 
   async write(fileName, data, createBackup = true) {
     const filePath = this.getFilePath(fileName);
-    const lock = new FileLock(filePath);
-
     try {
-      await lock.acquire();
       if (createBackup && fs.existsSync(filePath)) {
         const backupPath = `${filePath}.backup.${Date.now()}`;
         try {
@@ -97,22 +67,29 @@ class Storage {
           logger.warn(`Failed to create backup for ${fileName}`, backupErr);
         }
       }
-      const tempPath = `${filePath}.tmp`;
-      await fsPromises.writeFile(tempPath, JSON.stringify(data, null, 2));
-      await fsPromises.rename(tempPath, filePath);
+      // Write directly — temp+rename can fail on some mounted filesystems
+      await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2));
       logger.debug(`Updated file: ${fileName}`);
       return true;
     } catch (err) {
       logger.error(`Error writing ${fileName}`, err);
       throw err;
-    } finally {
-      await lock.release();
     }
   }
 
   async append(fileName, item) {
+    const filePath = this.getFilePath(fileName);
     try {
-      let data = await this.read(fileName);
+      // Read current data
+      let data = null;
+      if (fs.existsSync(filePath)) {
+        try {
+          const raw = await fsPromises.readFile(filePath, 'utf-8');
+          data = JSON.parse(raw);
+        } catch (e) {
+          data = null;
+        }
+      }
 
       // Auto-initialize if file is missing, null, or malformed
       if (!data || typeof data !== 'object') {
@@ -126,11 +103,12 @@ class Storage {
       } else if (Array.isArray(data.activities)) {
         data.activities.push(item);
       } else {
-        // No recognized array — initialize items array
         data.items = [item];
       }
 
-      await this.write(fileName, data);
+      // Direct write — temp+rename can fail on some mounted filesystems
+      await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2));
+
       return item;
     } catch (err) {
       logger.error(`Error appending to ${fileName}`, err);

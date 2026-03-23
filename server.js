@@ -204,17 +204,30 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
       jobs.push(...queueJobs.slice(0, limit));
     }
 
+    // Deduplicate by logical job ID — keep the latest state for each
+    const jobMap = new Map();
+    for (const j of jobs) {
+      const logicalId = j.data?.id || j.id;
+      const existing = jobMap.get(logicalId);
+      // Keep the most recent entry (by timestamp)
+      if (!existing || (j.timestamp || 0) >= (existing.timestamp || 0)) {
+        jobMap.set(logicalId, j);
+      }
+    }
+    const dedupedJobs = Array.from(jobMap.values());
+
     res.json({
       success: true,
-      jobs: jobs.map(j => ({
-        id: j.id,
-        state: j.state,
+      jobs: dedupedJobs.map(j => ({
+        id: j.data?.id || j.id,
+        queueState: j.state,
+        workflowState: j.data?.state || 'unknown',
         priority: j.priority,
         progress: j.progress || 0,
         createdAt: j.timestamp || j.createdAt,
         data: j.data
       })),
-      total: jobs.length,
+      total: dedupedJobs.length,
       stats
     });
   } catch (error) {
@@ -815,12 +828,9 @@ app.post('/api/pipeline/run', authenticateToken, async (req, res) => {
     // Run the pipeline cycle
     await appState.scheduler._runPipelineCycle();
 
-    // Log to activity
+    // Log to activity using append (avoids read+write contention)
     const storage = require('./utils/storage');
-    let activityData = await storage.read('activity.json');
-    if (!activityData) activityData = { activities: [] };
-    const activities = activityData.activities || [];
-    activities.unshift({
+    await storage.append('activity.json', {
       timestamp: new Date().toISOString(),
       agent: 'system',
       action: 'Manual pipeline cycle triggered',
@@ -828,7 +838,6 @@ app.post('/api/pipeline/run', authenticateToken, async (req, res) => {
       details: `Pipeline run initiated manually by owner (${MOCK_MODE ? 'mock' : 'production'} mode)`,
       metadata: { trigger: 'manual', mode: MOCK_MODE ? 'mock' : 'production' }
     });
-    await storage.write('activity.json', { activities }, false);
 
     res.json({
       success: true,
@@ -971,7 +980,7 @@ async function startServer() {
     console.log('[Server] Initializing data stores...');
     const storage = require('./utils/storage');
     const dataStores = {
-      'activity.json': { items: [] },
+      'activity.json': { activities: [] },
       'jobs.json': { jobs: [] },
       'metrics.json': { totalEarnings: 0, totalJobs: 0, activeJobs: 0, completedJobs: 0 },
       'portfolio.json': { items: [] },

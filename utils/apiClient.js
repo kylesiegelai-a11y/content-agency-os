@@ -277,14 +277,25 @@ Do not include any markdown formatting, code blocks, or explanations. Only outpu
       const response = await this.anthropicService.createMessage(params);
       const rawContent = response.content?.[0]?.text || '';
 
-      // Parse JSON response
+      // Parse JSON response — try strict parse, then extract from markdown, then fallback
       let parsedContent;
       try {
         parsedContent = JSON.parse(rawContent);
       } catch (parseError) {
-        logger.error(`[generateJSON] Failed to parse JSON response for job ${jobId}`);
-        logger.error('Raw content:', rawContent);
-        throw new Error(`Invalid JSON response: ${parseError.message}`);
+        // Try extracting JSON from markdown code blocks
+        const jsonMatch = rawContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          try {
+            parsedContent = JSON.parse(jsonMatch[1].trim());
+          } catch (e) {
+            // fall through to fallback
+          }
+        }
+
+        if (!parsedContent) {
+          logger.warn(`[generateJSON] Non-JSON response for job ${jobId}, wrapping as fallback`);
+          parsedContent = { rawContent, _fallback: true };
+        }
       }
 
       // Track tokens and costs
