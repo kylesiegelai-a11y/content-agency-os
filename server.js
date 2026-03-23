@@ -22,16 +22,11 @@ const { Scheduler } = require('./scheduler');
 const PORT = process.env.PORT || 3001;
 
 // --- MOCK-ONLY SECURITY RELAXATIONS ---
-// In MOCK_MODE:
-//   - JWT_SECRET defaults to 'mock-dev-secret' (no env var required)
-//   - MOCK_ADMIN_TOKEN bypasses JWT verification entirely
-//   - CORS is open to all origins
-// In PRODUCTION (MOCK_MODE=false):
-//   - JWT_SECRET must be set via environment variable or server refuses to start
-//   - No mock token bypass exists
-//   - CORS restricted to CORS_ORIGIN env var
+// Authentication is handled by utils/auth.js:
+//   MOCK_MODE  → mock-dev-secret + mock admin token bypass
+//   PRODUCTION → JWT_SECRET required, no mock bypass, API key support
+const { AuthManager, authMiddleware: hardenedAuthMiddleware } = require('./utils/auth');
 const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? 'mock-dev-secret' : null);
-const MOCK_ADMIN_TOKEN = 'mock-jwt-token-for-development';
 
 if (!MOCK_MODE && !JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required in production mode');
@@ -62,29 +57,9 @@ app.use(cors({
   credentials: true
 }));
 
-// JWT Middleware
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
-  }
-
-  // Allow mock token in development
-  if (MOCK_MODE && token === MOCK_ADMIN_TOKEN) {
-    req.user = { role: 'admin', mock: true };
-    return next();
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-};
+// Use the hardened auth middleware from utils/auth.js
+// Supports: JWT tokens, API keys (cao_*), mock token (dev only)
+const authenticateToken = hardenedAuthMiddleware;
 
 // ============================================================================
 // AUTH ROUTES
@@ -153,8 +128,10 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
     return res.status(400).json({ error: 'Current and new passwords required' });
   }
 
-  if (newPassword.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  // Enforce strong password policy
+  const strength = AuthManager.validatePasswordStrength(newPassword);
+  if (!strength.isValid) {
+    return res.status(400).json({ error: 'Weak password', details: strength.errors });
   }
 
   try {
@@ -182,6 +159,67 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('[Auth] Password change error:', error.message);
     res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+/**
+ * POST /api/auth/api-keys
+ * Generate a new API key for programmatic access
+ */
+app.post('/api/auth/api-keys', authenticateToken, async (req, res) => {
+  try {
+    const { label } = req.body;
+    const keyRecord = await AuthManager.generateApiKey(label || 'default');
+    await AuthManager.saveApiKey(keyRecord);
+
+    // Return the full key ONCE — it cannot be retrieved again
+    res.status(201).json({
+      success: true,
+      message: 'API key created. Save this key — it will not be shown again.',
+      apiKey: keyRecord.key,
+      prefix: keyRecord.keyPrefix,
+      label: keyRecord.label
+    });
+  } catch (error) {
+    console.error('[Auth] API key creation error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/auth/api-keys
+ * List all API keys (prefixes only, not the actual keys)
+ */
+app.get('/api/auth/api-keys', authenticateToken, async (req, res) => {
+  try {
+    const keys = await AuthManager.getStoredApiKeys();
+    res.json({
+      keys: keys.map(k => ({
+        prefix: k.keyPrefix,
+        label: k.label,
+        createdAt: k.createdAt,
+        lastUsedAt: k.lastUsedAt
+      }))
+    });
+  } catch (error) {
+    console.error('[Auth] API key list error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/auth/api-keys
+ * Revoke an API key by prefix
+ */
+app.delete('/api/auth/api-keys', authenticateToken, async (req, res) => {
+  try {
+    const { prefix } = req.body;
+    if (!prefix) return res.status(400).json({ error: 'Key prefix required' });
+    const result = await AuthManager.revokeApiKey(prefix);
+    res.json(result);
+  } catch (error) {
+    console.error('[Auth] API key revocation error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1140,6 +1178,80 @@ app.post('/api/invoices/:invoiceId/cancel', authenticateToken, async (req, res) 
     res.json({ success: true, invoice: result });
   } catch (error) {
     console.error('[API] POST /api/invoices/:invoiceId/cancel error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// OBSERVABILITY — Health, Alerts, Backup/Recovery
+// ============================================================================
+
+const observability = require('./utils/observability');
+
+/**
+ * GET /api/health
+ * Full system health snapshot
+ */
+app.get('/api/health', authenticateToken, async (req, res) => {
+  try {
+    const health = await observability.getHealthSnapshot();
+    const statusCode = health.status === 'critical' ? 503 : health.status === 'degraded' ? 200 : 200;
+    res.status(statusCode).json(health);
+  } catch (error) {
+    console.error('[API] GET /api/health error:', error.message);
+    res.status(500).json({ status: 'error', error: error.message });
+  }
+});
+
+/**
+ * GET /api/alerts
+ * Recent alerts
+ */
+app.get('/api/alerts', authenticateToken, (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  res.json(observability.getAlerts(limit));
+});
+
+/**
+ * POST /api/backup
+ * Create a backup of all data stores
+ */
+app.post('/api/backup', authenticateToken, async (req, res) => {
+  try {
+    const result = await observability.createBackup();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('[API] POST /api/backup error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/backups
+ * List available backups
+ */
+app.get('/api/backups', authenticateToken, (req, res) => {
+  try {
+    const backups = observability.listBackups();
+    res.json({ backups });
+  } catch (error) {
+    console.error('[API] GET /api/backups error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/restore
+ * Restore from a backup (creates safety backup first)
+ */
+app.post('/api/restore', authenticateToken, async (req, res) => {
+  try {
+    const { backupName } = req.body;
+    if (!backupName) return res.status(400).json({ error: 'backupName required' });
+    const result = await observability.restoreBackup(backupName);
+    res.json(result);
+  } catch (error) {
+    console.error('[API] POST /api/restore error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });

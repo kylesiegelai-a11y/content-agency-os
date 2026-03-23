@@ -8,6 +8,7 @@ import SystemSettings from './panels/SystemSettings'
 import BillingPanel from './panels/BillingPanel'
 import DeliveriesPanel from './panels/DeliveriesPanel'
 import CompliancePanel from './panels/CompliancePanel'
+import ObservabilityPanel from './panels/ObservabilityPanel'
 
 export default function App() {
   const [token, setToken] = useState(null)
@@ -106,6 +107,7 @@ export default function App() {
                 { id: 'billing', label: 'Billing', icon: '💰' },
                 { id: 'deliveries', label: 'Deliveries', icon: '📦' },
                 { id: 'compliance', label: 'Compliance', icon: '🛡' },
+                { id: 'observability', label: 'Observability', icon: '🔍' },
                 { id: 'settings', label: 'System Settings', icon: '⚙️' },
               ].map((panel) => (
                 <button
@@ -141,6 +143,7 @@ export default function App() {
             {activePanel === 'billing' && <BillingPanel token={token} />}
             {activePanel === 'deliveries' && <DeliveriesPanel token={token} />}
             {activePanel === 'compliance' && <CompliancePanel token={token} />}
+            {activePanel === 'observability' && <ObservabilityPanel token={token} />}
             {activePanel === 'settings' && (
               <SystemSettings
                 token={token}

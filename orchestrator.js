@@ -8,6 +8,7 @@ const path = require('path');
 const logger = require('./utils/logger');
 const { generateInvoice } = require('./utils/billing');
 const { notifyClientDelivery } = require('./utils/deliveryNotifier');
+const { recordJobResult } = require('./utils/observability');
 
 // Explicit agent module registry — maps route names to actual file exports
 const AGENT_MODULES = {
@@ -138,7 +139,9 @@ class Orchestrator {
     let result;
     try {
       result = await agent(job, { orchestrator: this });
+      recordJobResult(job.id, agentName, true);
     } catch (agentError) {
+      recordJobResult(job.id, agentName, false, agentError.message);
       logger.error('Agent execution failed', { jobId: job.id, agent: agentName, state: job.state, error: agentError.message, event: 'agent_failed' });
       await this.handleJobFailure(job, agentError);
       return { error: true, message: agentError.message };
