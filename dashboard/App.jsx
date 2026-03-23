@@ -6,6 +6,7 @@ import ActivityFeed from './panels/ActivityFeed'
 import PortfolioPanel from './panels/PortfolioPanel'
 import SystemSettings from './panels/SystemSettings'
 import BillingPanel from './panels/BillingPanel'
+import DeliveriesPanel from './panels/DeliveriesPanel'
 
 export default function App() {
   const [token, setToken] = useState(null)
@@ -102,6 +103,7 @@ export default function App() {
                 { id: 'activity', label: 'Activity Feed', icon: '📝' },
                 { id: 'portfolio', label: 'Portfolio', icon: '🎯' },
                 { id: 'billing', label: 'Billing', icon: '💰' },
+                { id: 'deliveries', label: 'Deliveries', icon: '📦' },
                 { id: 'settings', label: 'System Settings', icon: '⚙️' },
               ].map((panel) => (
                 <button
@@ -135,6 +137,7 @@ export default function App() {
             {activePanel === 'activity' && <ActivityFeed token={token} />}
             {activePanel === 'portfolio' && <PortfolioPanel token={token} />}
             {activePanel === 'billing' && <BillingPanel token={token} />}
+            {activePanel === 'deliveries' && <DeliveriesPanel token={token} />}
             {activePanel === 'settings' && (
               <SystemSettings
                 token={token}

@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('./utils/logger');
 const { generateInvoice } = require('./utils/billing');
+const { notifyClientDelivery } = require('./utils/deliveryNotifier');
 
 // Explicit agent module registry — maps route names to actual file exports
 const AGENT_MODULES = {
@@ -413,6 +414,18 @@ class Orchestrator {
       } catch (invoiceErr) {
         // Non-blocking — delivery succeeds even if invoicing fails
         logger.warn('Auto-invoice generation failed', { jobId: id, error: invoiceErr.message, event: 'auto_invoice_error' });
+      }
+
+      // Auto-notify client on delivery
+      try {
+        const deliveryResults = result?.deliveryResults || [];
+        const notification = await notifyClientDelivery(job, deliveryResults);
+        if (notification?.sent) {
+          job.notificationSent = true;
+          logger.info('Client notified on delivery', { jobId: id, to: notification.to, event: 'delivery_notification' });
+        }
+      } catch (notifyErr) {
+        logger.warn('Delivery notification failed', { jobId: id, error: notifyErr.message, event: 'notification_error' });
       }
     }
 

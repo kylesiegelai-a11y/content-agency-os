@@ -269,7 +269,7 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
  */
 app.post('/api/jobs', authenticateToken, async (req, res) => {
   try {
-    const { type, priority = 0, deadline, data = {} } = req.body;
+    const { type, priority = 0, deadline, data = {}, deliveryFormats, client } = req.body;
 
     if (!type) {
       return res.status(400).json({ error: 'Job type required' });
@@ -279,7 +279,9 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
       type,
       priority,
       deadline,
-      data
+      data,
+      ...(deliveryFormats && { deliveryFormats }),
+      ...(client && { client })
     });
 
     if (!result) {
@@ -1138,6 +1140,59 @@ app.post('/api/invoices/:invoiceId/cancel', authenticateToken, async (req, res) 
     res.json({ success: true, invoice: result });
   } catch (error) {
     console.error('[API] POST /api/invoices/:invoiceId/cancel error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// DELIVERY FORMAT CONFIGURATION
+// ============================================================================
+
+const { SUPPORTED_FORMATS, KAIL_BRAND } = require('./utils/deliveryFormats');
+
+/**
+ * GET /api/delivery/config
+ * Get supported delivery formats and current branding
+ */
+app.get('/api/delivery/config', authenticateToken, async (req, res) => {
+  try {
+    res.json({
+      supportedFormats: SUPPORTED_FORMATS,
+      defaultFormats: ['markdown'],
+      defaultBrand: KAIL_BRAND
+    });
+  } catch (error) {
+    console.error('[API] GET /api/delivery/config error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/delivery/preview
+ * Generate a preview delivery in requested formats (for testing)
+ */
+app.post('/api/delivery/preview', authenticateToken, async (req, res) => {
+  try {
+    const { generateDeliverables } = require('./utils/deliveryFormats');
+    const { title = 'Preview Deliverable', body = 'This is a sample preview of the delivery format.', formats = ['markdown', 'html', 'pdf'], client } = req.body;
+
+    const mockJob = {
+      id: `preview_${Date.now()}`,
+      jobId: `preview_${Date.now()}`,
+      content: { title, body },
+      deliveryFormats: formats,
+      client: client || {}
+    };
+
+    const results = await generateDeliverables(mockJob, mockJob.content, { formats });
+
+    res.json({
+      success: true,
+      preview: true,
+      results
+    });
+  } catch (error) {
+    console.error('[API] POST /api/delivery/preview error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
