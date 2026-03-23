@@ -967,6 +967,20 @@ async function startServer() {
     console.log('╚════════════════════════════════════════════════════════╝');
     console.log('');
 
+    // Initialize required JSON data stores
+    console.log('[Server] Initializing data stores...');
+    const storage = require('./utils/storage');
+    const dataStores = {
+      'activity.json': { items: [] },
+      'jobs.json': { jobs: [] },
+      'metrics.json': { totalEarnings: 0, totalJobs: 0, activeJobs: 0, completedJobs: 0 },
+      'portfolio.json': { items: [] },
+      'approvals.json': { items: [] }
+    };
+    for (const [fileName, defaultContent] of Object.entries(dataStores)) {
+      await storage.initialize(fileName, defaultContent);
+    }
+
     // Initialize queues
     console.log('[Server] Initializing queues...');
     appState.queues = await initializeQueues();

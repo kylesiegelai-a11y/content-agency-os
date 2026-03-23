@@ -7,7 +7,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.js'],
-  testPathIgnorePatterns: ['/node_modules/', '/tmp/', '/data/', '/dashboard/'],
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/tmp/', '<rootDir>/data/', '<rootDir>/dashboard/'],
   collectCoverage: true,
   coverageDirectory: './coverage',
   coverageReporters: ['text', 'text-summary'],

@@ -112,14 +112,24 @@ class Storage {
 
   async append(fileName, item) {
     try {
-      const data = await this.read(fileName);
+      let data = await this.read(fileName);
+
+      // Auto-initialize if file is missing, null, or malformed
+      if (!data || typeof data !== 'object') {
+        data = { items: [] };
+      }
+
       if (Array.isArray(data)) {
         data.push(item);
       } else if (Array.isArray(data.items)) {
         data.items.push(item);
+      } else if (Array.isArray(data.activities)) {
+        data.activities.push(item);
       } else {
-        throw new Error(`Cannot append to ${fileName}: no array found`);
+        // No recognized array — initialize items array
+        data.items = [item];
       }
+
       await this.write(fileName, data);
       return item;
     } catch (err) {
