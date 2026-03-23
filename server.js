@@ -1145,6 +1145,165 @@ app.post('/api/invoices/:invoiceId/cancel', authenticateToken, async (req, res) 
 });
 
 // ============================================================================
+// COMPLIANCE GUARDRAILS
+// ============================================================================
+
+const compliance = require('./utils/compliance');
+
+/**
+ * GET /api/compliance/summary
+ * Full compliance dashboard: rate limits, suppression, audit log
+ */
+app.get('/api/compliance/summary', authenticateToken, async (req, res) => {
+  try {
+    const summary = await compliance.getComplianceSummary();
+    res.json(summary);
+  } catch (error) {
+    console.error('[API] GET /api/compliance/summary error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/compliance/rate-limits
+ * Current rate-limit status for today
+ */
+app.get('/api/compliance/rate-limits', authenticateToken, async (req, res) => {
+  try {
+    const status = await compliance.getRateLimitStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('[API] GET /api/compliance/rate-limits error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/compliance/suppression
+ * Get suppression list (emails + domains)
+ */
+app.get('/api/compliance/suppression', authenticateToken, async (req, res) => {
+  try {
+    const list = await compliance.getSuppressionList();
+    res.json(list);
+  } catch (error) {
+    console.error('[API] GET /api/compliance/suppression error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/compliance/suppression/email
+ * Add an email to the suppression list
+ */
+app.post('/api/compliance/suppression/email', authenticateToken, async (req, res) => {
+  try {
+    const { email, reason } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    const result = await compliance.addToSuppressionList(email, reason || 'manual', 'user');
+    res.json(result);
+  } catch (error) {
+    console.error('[API] POST /api/compliance/suppression/email error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/compliance/suppression/email
+ * Remove an email from the suppression list
+ */
+app.delete('/api/compliance/suppression/email', authenticateToken, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    const result = await compliance.removeFromSuppressionList(email);
+    res.json(result);
+  } catch (error) {
+    console.error('[API] DELETE /api/compliance/suppression/email error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/compliance/suppression/domain
+ * Add a domain to the suppression list
+ */
+app.post('/api/compliance/suppression/domain', authenticateToken, async (req, res) => {
+  try {
+    const { domain, reason } = req.body;
+    if (!domain) return res.status(400).json({ error: 'Domain required' });
+    const result = await compliance.addDomainToSuppressionList(domain, reason || 'manual', 'user');
+    res.json(result);
+  } catch (error) {
+    console.error('[API] POST /api/compliance/suppression/domain error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/compliance/suppression/domain
+ * Remove a domain from the suppression list
+ */
+app.delete('/api/compliance/suppression/domain', authenticateToken, async (req, res) => {
+  try {
+    const { domain } = req.body;
+    if (!domain) return res.status(400).json({ error: 'Domain required' });
+    const result = await compliance.removeDomainFromSuppressionList(domain);
+    res.json(result);
+  } catch (error) {
+    console.error('[API] DELETE /api/compliance/suppression/domain error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/compliance/check
+ * Pre-send compliance check for an email address
+ */
+app.post('/api/compliance/check', authenticateToken, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    const result = await compliance.preSendCheck(email);
+    res.json(result);
+  } catch (error) {
+    console.error('[API] POST /api/compliance/check error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/compliance/purge
+ * GDPR/CCPA data purge — remove all PII for an email address
+ */
+app.post('/api/compliance/purge', authenticateToken, async (req, res) => {
+  try {
+    const { email, regulation } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    const result = await compliance.purgePersonalData(email, 'owner', regulation || 'manual');
+    res.json(result);
+  } catch (error) {
+    console.error('[API] POST /api/compliance/purge error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/compliance/audit-log
+ * Get compliance audit trail
+ */
+app.get('/api/compliance/audit-log', authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const log = await compliance.getAuditLog(limit);
+    res.json(log);
+  } catch (error) {
+    console.error('[API] GET /api/compliance/audit-log error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
 // DELIVERY FORMAT CONFIGURATION
 // ============================================================================
 
@@ -1273,7 +1432,8 @@ async function startServer() {
       'approvals.json': { items: [] },
       'niches.json': { niches: {} },
       'ledger.json': { transactions: [], total: 0 },
-      'invoices.json': { invoices: [], summary: { totalInvoiced: 0, totalPaid: 0, totalOutstanding: 0 } }
+      'invoices.json': { invoices: [], summary: { totalInvoiced: 0, totalPaid: 0, totalOutstanding: 0 } },
+      'compliance.json': { rateLimits: {}, suppression: { emails: [], domains: [] }, sendLog: [], purgeLog: [], auditLog: [] }
     };
     for (const [fileName, defaultContent] of Object.entries(dataStores)) {
       await storage.initialize(fileName, defaultContent);

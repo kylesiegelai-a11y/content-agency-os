@@ -9,6 +9,7 @@
 const logger = require('./logger');
 const serviceFactory = require('./serviceFactory');
 const { resolveBranding } = require('./deliveryFormats');
+const { isSuppressed, recordSend } = require('./compliance');
 
 /**
  * Send a delivery notification email to the client.
@@ -62,6 +63,21 @@ async function notifyClientDelivery(job, deliveryResults = []) {
     brand.website ? brand.website : ''
   ].join('\n');
 
+  // Suppression check — don't notify suppressed contacts
+  try {
+    const suppression = await isSuppressed(client.email);
+    if (suppression.suppressed) {
+      logger.info('[deliveryNotifier] Client is suppressed — skipping notification', {
+        jobId: job.id || job.jobId,
+        email: client.email
+      });
+      return { sent: false, reason: 'suppressed' };
+    }
+  } catch (suppErr) {
+    // Non-blocking — proceed with send if suppression check fails
+    logger.warn('[deliveryNotifier] Suppression check failed, proceeding', { error: suppErr.message });
+  }
+
   try {
     const gmail = serviceFactory.getService('gmail');
 
@@ -71,6 +87,9 @@ async function notifyClientDelivery(job, deliveryResults = []) {
       subject,
       body
     });
+
+    // Record send for rate-limit tracking
+    try { await recordSend(client.email); } catch (_) { /* non-blocking */ }
 
     logger.info('[deliveryNotifier] Notification sent', {
       jobId: job.id || job.jobId,

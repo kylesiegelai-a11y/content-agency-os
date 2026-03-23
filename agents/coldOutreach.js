@@ -8,6 +8,7 @@ const ApiClient = require('../utils/apiClient');
 const serviceFactory = require('../utils/serviceFactory');
 const { readData, writeData, appendToArray } = require('../utils/storage');
 const { getPromptManager } = require('../utils/promptManager');
+const { preSendCheck, recordSend } = require('../utils/compliance');
 const logger = require('../utils/logger');
 
 /**
@@ -128,25 +129,38 @@ EMAIL:
       usage: result.usage
     };
 
-    // Optionally send email via Gmail service
-    if (job.sendImmediately) {
-      try {
-        const gmailService = serviceFactory.getService('gmail');
-        const sendResult = await gmailService.sendEmail({
-          to: recipient.email,
-          subject,
-          body,
-          isHtml: false
-        });
+    // Compliance pre-send check (suppression list + rate limits)
+    if (job.sendImmediately && recipient.email) {
+      const complianceCheck = await preSendCheck(recipient.email);
 
-        outreachData.status = 'sent';
-        outreachData.sendTime = new Date().toISOString();
-        outreachData.messageId = sendResult?.messageId;
+      if (!complianceCheck.allowed) {
+        outreachData.status = 'blocked';
+        outreachData.complianceReason = complianceCheck.reason;
+        outreachData.complianceCheck = complianceCheck.check;
+        logger.warn(`[coldOutreach] Send blocked by compliance for job ${jobId}: ${complianceCheck.reason}`);
+      } else {
+        // Compliance passed — send email via Gmail service
+        try {
+          const gmailService = serviceFactory.getService('gmail');
+          const sendResult = await gmailService.sendEmail({
+            to: recipient.email,
+            subject,
+            body,
+            isHtml: false
+          });
 
-        logger.info(`[coldOutreach] Email sent for job ${jobId} to ${recipient.email}`);
-      } catch (emailError) {
-        logger.warn(`[coldOutreach] Failed to send email: ${emailError.message}`);
-        outreachData.sendError = emailError.message;
+          outreachData.status = 'sent';
+          outreachData.sendTime = new Date().toISOString();
+          outreachData.messageId = sendResult?.messageId;
+
+          // Record the send for rate-limit tracking
+          await recordSend(recipient.email);
+
+          logger.info(`[coldOutreach] Email sent for job ${jobId} to ${recipient.email}`);
+        } catch (emailError) {
+          logger.warn(`[coldOutreach] Failed to send email: ${emailError.message}`);
+          outreachData.sendError = emailError.message;
+        }
       }
     }
 
