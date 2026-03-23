@@ -1,0 +1,104 @@
+{
+  "app": {
+    "name": "Content Agency OS",
+    "version": "1.0.0",
+    "description": "Automated content creation and agency management system"
+  },
+  "budget": {
+    "monthly_ceiling": 500,
+    "cost_thresholds": {
+      "warning": 0.80,
+      "critical": 0.95,
+      "hard_limit": 1.10
+    },
+    "currency": "USD"
+  },
+  "pricing_tiers": {
+    "introductory": {
+      "name": "Introductory",
+      "monthly_cost": 49,
+      "monthly_jobs": 5
+    },
+    "standard": {
+      "name": "Standard",
+      "monthly_cost": 149,
+      "monthly_jobs": 20
+    },
+    "premium": {
+      "name": "Premium",
+      "monthly_cost": 299,
+      "monthly_jobs": 50
+    }
+  },
+  "niche_scope": {
+    "enabled_niches": ["HR", "PEO", "benefits", "compliance"]
+  },
+  "job_processing": {
+    "cycle_interval_hours": 4,
+    "cron_schedule": "0 */4 * * *",
+    "max_cost_per_job": 50,
+    "job_timeout_ms": 300000,
+    "max_retries": 3,
+    "retry_delay_ms": 5000,
+    "quality_threshold": 3
+  },
+  "token_tracking": {
+    "models": {
+      "claude_sonnet": {
+        "input_cost_per_1m": 3.0,
+        "output_cost_per_1m": 15.0,
+        "name": "Claude Sonnet"
+      },
+      "claude_haiku": {
+        "input_cost_per_1m": 0.80,
+        "output_cost_per_1m": 4.0,
+        "name": "Claude Haiku"
+      },
+      "gpt_4": {
+        "input_cost_per_1m": 30.0,
+        "output_cost_per_1m": 60.0,
+        "name": "GPT-4"
+      },
+      "gpt_3_5_turbo": {
+        "input_cost_per_1m": 0.50,
+        "output_cost_per_1m": 1.50,
+        "name": "GPT-3.5 Turbo"
+      }
+    },
+    "buffer_percentage": 0.15
+  },
+  "queue_configuration": {
+    "job_queue": {
+      "name": "jobs",
+      "max_attempts": 3,
+      "rate_limit_per_minute": 50
+    },
+    "opportunity_queue": {
+      "name": "opportunities",
+      "max_attempts": 2,
+      "rate_limit_per_minute": 30
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "files": {
+      "app": "./logs/app.log",
+      "error": "./logs/error.log"
+    }
+  },
+  "data_files": {
+    "jobs": "./data/jobs.json",
+    "ledger": "./data/ledger.json",
+    "niches": "./data/niches.json",
+    "activity": "./data/activity.json",
+    "portfolio": "./data/portfolio.json",
+    "deadletter": "./data/deadletter.json",
+    "clients": "./data/clients.json",
+    "retry_queue": "./data/retry_queue.json"
+  },
+  "security": {
+    "jwt_expiration": "24h",
+    "password_min_length": 12
+  }
+}

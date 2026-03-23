@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+dashboard/node_modules/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Data & Logs
+data/*.json
+data/*.backup.*
+data/*.lock
+!data/.gitkeep
+logs/
+tmp/
+
+# Build output
+dashboard/dist/
+dashboard/build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Lock files (keep package-lock)
+*.lock
+!package-lock.json
+!dashboard/package-lock.json

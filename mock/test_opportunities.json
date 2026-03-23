@@ -1,0 +1,156 @@
+[
+  {
+    "id": "job_001",
+    "title": "Write Technical Blog Posts for SaaS Startup",
+    "description": "Looking for experienced content writer to create 4 technical blog posts about cloud infrastructure. Posts should be 2000+ words each, SEO-optimized, and include code examples.",
+    "niche": "technology",
+    "budget": {
+      "type": "fixed",
+      "amount": 2500
+    },
+    "duration": "less_than_month",
+    "experience_level": "intermediate",
+    "skills": ["technical writing", "SEO", "cloud computing"],
+    "posted_at": "2026-03-20T10:30:00Z",
+    "client": {
+      "name": "TechStart Inc",
+      "rating": 4.8,
+      "reviews": 12
+    }
+  },
+  {
+    "id": "job_002",
+    "title": "Create Marketing Proposal for Enterprise Client",
+    "description": "Need compelling marketing proposal for enterprise software solution. Should include market analysis, competitive positioning, and implementation roadmap.",
+    "niche": "marketing",
+    "budget": {
+      "type": "fixed",
+      "amount": 1800
+    },
+    "duration": "1_to_3_months",
+    "experience_level": "advanced",
+    "skills": ["proposal writing", "marketing strategy", "business analysis"],
+    "posted_at": "2026-03-21T14:15:00Z",
+    "client": {
+      "name": "ConsultPro Group",
+      "rating": 4.6,
+      "reviews": 28
+    }
+  },
+  {
+    "id": "job_003",
+    "title": "HR Content: Employee Handbook Updates",
+    "description": "Update and expand employee handbook with modern HR policies. Need content writer experienced in HR/employment law to create clear, accessible policy documents.",
+    "niche": "human_resources",
+    "budget": {
+      "type": "fixed",
+      "amount": 1200
+    },
+    "duration": "1_to_3_months",
+    "experience_level": "intermediate",
+    "skills": ["HR writing", "policy documentation", "compliance"],
+    "posted_at": "2026-03-19T09:00:00Z",
+    "client": {
+      "name": "PeopleFirst HR",
+      "rating": 4.9,
+      "reviews": 35
+    }
+  },
+  {
+    "id": "job_004",
+    "title": "Develop Content Strategy for Healthcare Startup",
+    "description": "Create comprehensive content strategy for healthcare tech startup. Includes audience research, content calendar, distribution channels, and KPI framework.",
+    "niche": "healthcare",
+    "budget": {
+      "type": "hourly",
+      "rate": 75,
+      "hours": 40
+    },
+    "duration": "1_to_3_months",
+    "experience_level": "advanced",
+    "skills": ["content strategy", "healthcare knowledge", "analytics"],
+    "posted_at": "2026-03-17T11:45:00Z",
+    "client": {
+      "name": "HealthInnovate Labs",
+      "rating": 4.7,
+      "reviews": 18
+    }
+  },
+  {
+    "id": "job_005",
+    "title": "Email Marketing Campaign Copy",
+    "description": "Write email marketing sequences for e-commerce platform. Need 5 email campaigns with subject lines, body copy, and CTAs optimized for conversions.",
+    "niche": "ecommerce",
+    "budget": {
+      "type": "fixed",
+      "amount": 950
+    },
+    "duration": "less_than_month",
+    "experience_level": "intermediate",
+    "skills": ["copywriting", "email marketing", "conversion optimization"],
+    "posted_at": "2026-03-21T16:20:00Z",
+    "client": {
+      "name": "ShopVibe Commerce",
+      "rating": 4.5,
+      "reviews": 22
+    }
+  },
+  {
+    "id": "job_006",
+    "title": "Financial Services White Paper",
+    "description": "Research and write white paper on fintech regulatory compliance. 5000 words, must include case studies and actionable recommendations.",
+    "niche": "finance",
+    "budget": {
+      "type": "fixed",
+      "amount": 3200
+    },
+    "duration": "1_to_3_months",
+    "experience_level": "advanced",
+    "skills": ["technical writing", "finance", "research"],
+    "posted_at": "2026-03-18T13:30:00Z",
+    "client": {
+      "name": "FinServe Consultants",
+      "rating": 4.8,
+      "reviews": 41
+    }
+  },
+  {
+    "id": "job_007",
+    "title": "Real Estate Marketing Materials",
+    "description": "Write marketing copy for luxury real estate listings. Need compelling descriptions for 10 high-end properties including buyer personas and value propositions.",
+    "niche": "real_estate",
+    "budget": {
+      "type": "fixed",
+      "amount": 1100
+    },
+    "duration": "less_than_month",
+    "experience_level": "intermediate",
+    "skills": ["marketing copy", "luxury brand", "real estate"],
+    "posted_at": "2026-03-16T10:00:00Z",
+    "client": {
+      "name": "LuxeProperty Agency",
+      "rating": 4.6,
+      "reviews": 15
+    }
+  },
+  {
+    "id": "job_008",
+    "title": "Legal Document Templates and Guides",
+    "description": "Create plain-language guides for legal documents. Convert complex legal language into accessible customer guides (20+ pages total).",
+    "niche": "legal",
+    "budget": {
+      "type": "hourly",
+      "rate": 85,
+      "hours": 50
+    },
+    "duration": "1_to_3_months",
+    "experience_level": "advanced",
+    "skills": ["legal writing", "plain language", "documentation"],
+    "posted_at": "2026-03-20T15:45:00Z",
+    "client": {
+      "name": "LegalEase Solutions",
+      "rating": 4.9,
+      "reviews": 52
+    }
+  }
+]

@@ -1,0 +1,46 @@
+{
+  "name": "content-agency-os",
+  "version": "1.0.0",
+  "description": "Production-ready Content Agency OS with job orchestration, scheduling, and queue management",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "MOCK_MODE=true nodemon server.js",
+    "test": "jest",
+    "lint": "eslint .",
+    "kill-switch": "curl -X POST http://localhost:3001/api/settings/kill-switch -H 'Authorization: Bearer mock-jwt-token-for-development' -H 'Content-Type: application/json' -d '{\"enabled\": true}'"
+  },
+  "keywords": [
+    "content-agency",
+    "job-orchestration",
+    "queue-management",
+    "scheduling",
+    "bull",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bull": "^4.11.5",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "cron": "^3.0.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.0",
+    "morgan": "^1.10.0",
+    "redis": "^4.6.12",
+    "uuid": "^9.0.0",
+    "winston": "^3.11.0",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "eslint": "^8.54.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
