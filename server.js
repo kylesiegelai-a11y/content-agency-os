@@ -224,6 +224,55 @@ app.delete('/api/auth/api-keys', authenticateToken, async (req, res) => {
 });
 
 // ============================================================================
+// GOOGLE OAUTH ROUTES (first-time setup for Gmail + Drive)
+// ============================================================================
+
+/**
+ * GET /api/auth/google
+ * Redirect to Google OAuth consent screen
+ */
+app.get('/api/auth/google', (req, res) => {
+  const { isMockMode } = require('./utils/serviceFactory');
+  if (isMockMode()) {
+    return res.json({ message: 'Google OAuth not needed in mock mode' });
+  }
+
+  try {
+    const gmailService = require('./utils/serviceFactory').getService('gmail');
+    if (!gmailService.getAuthUrl) {
+      return res.status(400).json({ error: 'Gmail service does not support OAuth setup' });
+    }
+    const authUrl = gmailService.getAuthUrl();
+    res.redirect(authUrl);
+  } catch (error) {
+    res.status(500).json({ error: `OAuth setup failed: ${error.message}` });
+  }
+});
+
+/**
+ * GET /api/auth/google/callback
+ * Handle OAuth2 callback and store refresh token
+ */
+app.get('/api/auth/google/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) {
+    return res.status(400).json({ error: 'No authorization code provided' });
+  }
+
+  try {
+    const gmailService = require('./utils/serviceFactory').getService('gmail');
+    const tokens = await gmailService.handleAuthCallback(code);
+    res.json({
+      message: 'Google OAuth setup complete! Add GOOGLE_REFRESH_TOKEN to your .env file.',
+      refresh_token: tokens.refresh_token,
+      note: 'Store this refresh token securely — it will not be shown again.'
+    });
+  } catch (error) {
+    res.status(500).json({ error: `OAuth callback failed: ${error.message}` });
+  }
+});
+
+// ============================================================================
 // JOBS API ROUTES
 // ============================================================================
 

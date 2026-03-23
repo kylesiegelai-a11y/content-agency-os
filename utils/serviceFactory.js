@@ -13,6 +13,12 @@ const DriveMock = require('../mock/providers/driveMock');
 const UpworkMock = require('../mock/providers/upworkMock');
 const CalendlyMock = require('../mock/providers/calendlyMock');
 
+// Import real providers
+const AnthropicRealProvider = require('../providers/anthropicReal');
+const GmailRealProvider = require('../providers/gmailReal');
+const DriveRealProvider = require('../providers/driveReal');
+const CalendlyRealProvider = require('../providers/calendlyReal');
+
 // Service instances cache
 const serviceInstances = {};
 
@@ -94,7 +100,7 @@ function getService(serviceName, options = {}) {
 
     console.log(`[ServiceFactory] Loaded ${serviceType} (MOCK MODE)`);
   } else {
-    // Initialize real provider stubs
+    // Initialize real providers
     switch (normalizedName) {
       case 'anthropic':
         service = new AnthropicRealProvider(options);
@@ -112,8 +118,9 @@ function getService(serviceName, options = {}) {
         break;
 
       case 'upwork':
-        service = new UpworkRealProvider(options);
-        serviceType = 'UpworkReal';
+        // Upwork still uses mock in production (no API keys yet)
+        service = new UpworkMock(options);
+        serviceType = 'UpworkMock (no real provider yet)';
         break;
 
       case 'calendly':
@@ -134,65 +141,6 @@ function getService(serviceName, options = {}) {
   serviceInstances[normalizedName] = service;
 
   return service;
-}
-
-/**
- * Real provider stubs (TODO: Implement with actual credentials)
- */
-
-class AnthropicRealProvider {
-  constructor(options = {}) {
-    this.options = options;
-    // TODO: Initialize with real Anthropic API
-    // TODO: Handle API_KEY credential from environment
-    throw new Error(
-      'AnthropicRealProvider not yet implemented. Set MOCK_MODE=true or implement real provider.'
-    );
-  }
-}
-
-class GmailRealProvider {
-  constructor(options = {}) {
-    this.options = options;
-    // TODO: Initialize with real Gmail API
-    // TODO: Handle OAuth2 credentials and refresh tokens
-    throw new Error(
-      'GmailRealProvider not yet implemented. Set MOCK_MODE=true or implement real provider.'
-    );
-  }
-}
-
-class DriveRealProvider {
-  constructor(options = {}) {
-    this.options = options;
-    // TODO: Initialize with real Google Drive API
-    // TODO: Handle OAuth2 credentials and refresh tokens
-    throw new Error(
-      'DriveRealProvider not yet implemented. Set MOCK_MODE=true or implement real provider.'
-    );
-  }
-}
-
-class UpworkRealProvider {
-  constructor(options = {}) {
-    this.options = options;
-    // TODO: Initialize with real Upwork API
-    // TODO: Handle OAuth credentials and API keys
-    throw new Error(
-      'UpworkRealProvider not yet implemented. Set MOCK_MODE=true or implement real provider.'
-    );
-  }
-}
-
-class CalendlyRealProvider {
-  constructor(options = {}) {
-    this.options = options;
-    // TODO: Initialize with real Calendly API
-    // TODO: Handle personal access token credential
-    throw new Error(
-      'CalendlyRealProvider not yet implemented. Set MOCK_MODE=true or implement real provider.'
-    );
-  }
 }
 
 /**
@@ -243,8 +191,8 @@ function initializeAllServices() {
       services[serviceName] = getService(serviceName);
     } catch (error) {
       if (!MOCK_MODE) {
-        // Expected error for real providers not implemented
-        console.warn(`Could not initialize ${serviceName}: ${error.message}`);
+        // In production, warn but don't crash — some services may not be configured
+        console.warn(`[ServiceFactory] Could not initialize ${serviceName}: ${error.message}`);
       } else {
         console.error(`Error initializing ${serviceName}:`, error.message);
         throw error;
