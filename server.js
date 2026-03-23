@@ -86,9 +86,10 @@ function loginRateLimiter(req, res, next) {
   const record = loginAttempts.get(ip);
 
   if (record) {
-    // Clean expired entries
+    // Clean expired entries — must skip rate-limit check after deletion
     if (now - record.firstAttempt > LOGIN_RATE_LIMIT.windowMs) {
       loginAttempts.delete(ip);
+      // Fall through to tracking below with a fresh record
     } else if (record.count >= LOGIN_RATE_LIMIT.maxAttempts) {
       const retryAfter = Math.ceil((record.firstAttempt + LOGIN_RATE_LIMIT.windowMs - now) / 1000);
       return res.status(429).json({
@@ -98,7 +99,7 @@ function loginRateLimiter(req, res, next) {
     }
   }
 
-  // Track this attempt
+  // Track this attempt (re-read from Map since record may have been deleted above)
   const existing = loginAttempts.get(ip);
   if (existing && (now - existing.firstAttempt <= LOGIN_RATE_LIMIT.windowMs)) {
     existing.count++;
@@ -437,7 +438,7 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
     if (!ALLOWED_JOB_TYPES.includes(type)) {
       return res.status(400).json({ error: `Invalid job type. Allowed: ${ALLOWED_JOB_TYPES.join(', ')}` });
     }
-    if (typeof data !== 'object' || Array.isArray(data)) {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
       return res.status(400).json({ error: 'Job data must be a plain object' });
     }
     if (JSON.stringify(data).length > 50000) {
@@ -450,6 +451,12 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
     }
     if (priority !== undefined && (typeof priority !== 'number' || priority < 0 || priority > 10)) {
       return res.status(400).json({ error: 'Priority must be a number between 0 and 10' });
+    }
+    if (deadline !== undefined) {
+      const deadlineDate = new Date(deadline);
+      if (isNaN(deadlineDate.getTime())) {
+        return res.status(400).json({ error: 'Deadline must be a valid ISO 8601 date string' });
+      }
     }
 
     const result = await appState.orchestrator.acceptTestJob({
@@ -910,6 +917,17 @@ app.patch('/api/settings/agents/:agentId', authenticateToken, (req, res) => {
     const { agentId } = req.params;
     const { paused } = req.body;
 
+    // Validate agentId against known agents to prevent arbitrary key injection
+    const KNOWN_AGENTS = [
+      'briefAnalyzer', 'researcher', 'strategist', 'writer', 'editor',
+      'seoOptimizer', 'factChecker', 'plagiarismChecker', 'toneAnalyzer',
+      'clientLiaison', 'outreachSpecialist', 'proposalGenerator',
+      'performanceAnalyst', 'qualityAssurance', 'scheduler', 'invoiceGenerator'
+    ];
+    if (!KNOWN_AGENTS.includes(agentId)) {
+      return res.status(400).json({ error: `Unknown agent: ${agentId}` });
+    }
+
     appState.config.agentPauseStates[agentId] = paused;
     console.log(`[Server] Agent ${agentId} pause state set to: ${paused}`);
 
@@ -1229,7 +1247,10 @@ app.post('/api/invoices', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'client.name and lineItems[] are required' });
     }
 
-    const total = lineItems.reduce((sum, li) => sum + (li.total || li.unitPrice * (li.quantity || 1)), 0);
+    const total = lineItems.reduce((sum, li) => {
+      const liTotal = Number(li.total) || (Number(li.unitPrice) || 0) * (Number(li.quantity) || 1);
+      return sum + (isFinite(liTotal) ? liTotal : 0);
+    }, 0);
     const now = new Date();
     const dueDate = new Date(now);
     dueDate.setDate(dueDate.getDate() + dueInDays);
@@ -1239,12 +1260,17 @@ app.post('/api/invoices', authenticateToken, async (req, res) => {
       id: `inv_${uuidv4().slice(0, 8)}`,
       jobId: null,
       client: { name: client.name, email: client.email || null },
-      lineItems: lineItems.map(li => ({
-        description: li.description || 'Service',
-        quantity: li.quantity || 1,
-        unitPrice: li.unitPrice || 0,
-        total: li.total || li.unitPrice * (li.quantity || 1)
-      })),
+      lineItems: lineItems.map(li => {
+        const qty = Number(li.quantity) || 1;
+        const price = Number(li.unitPrice) || 0;
+        const liTotal = Number(li.total) || price * qty;
+        return {
+          description: li.description || 'Service',
+          quantity: qty,
+          unitPrice: price,
+          total: isFinite(liTotal) ? liTotal : 0
+        };
+      }),
       subtotal: total,
       tax: 0,
       total,
@@ -1352,7 +1378,8 @@ app.get('/api/health', authenticateToken, async (req, res) => {
  * Recent alerts
  */
 app.get('/api/alerts', authenticateToken, (req, res) => {
-  const limit = parseInt(req.query.limit) || 50;
+  const parsed = parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(parsed) && parsed >= 0 ? parsed : 50;
   res.json(observability.getAlerts(limit));
 });
 
@@ -1550,7 +1577,8 @@ app.post('/api/compliance/purge', authenticateToken, async (req, res) => {
  */
 app.get('/api/compliance/audit-log', authenticateToken, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 100;
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit >= 0 ? parsedLimit : 100;
     const log = await compliance.getAuditLog(limit);
     res.json(log);
   } catch (error) {
@@ -1737,8 +1765,17 @@ async function startServer() {
       console.log('');
       console.log('[Server] Shutting down gracefully...');
 
-      server.close(() => {
-        console.log('[Server] HTTP server closed');
+      // Wait for in-flight HTTP requests to finish before tearing down services
+      await new Promise((resolve) => {
+        server.close(() => {
+          console.log('[Server] HTTP server closed');
+          resolve();
+        });
+        // Safety timeout: force-close after 10 seconds
+        setTimeout(() => {
+          console.warn('[Server] Forcefully closing HTTP server after timeout');
+          resolve();
+        }, 10000);
       });
 
       if (appState.scheduler) {

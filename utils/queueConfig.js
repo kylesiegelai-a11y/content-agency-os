@@ -17,6 +17,7 @@ class InMemoryQueue {
     this.jobs = new Map();
     this.jobId = 0;
     this.processors = [];
+    this._maxCompletedJobs = options.maxCompletedJobs || 500;
     this.eventListeners = {
       completed: [],
       failed: [],
@@ -83,6 +84,7 @@ class InMemoryQueue {
       }
       job.state = 'completed';
       this._emit('completed', job);
+      this._evictCompletedJobs();
     } catch (error) {
       job.attemptsMade++;
       if (job.attemptsMade < job.attempts) {
@@ -102,6 +104,26 @@ class InMemoryQueue {
       return backoff.delay * Math.pow(2, attempt - 1);
     }
     return backoff.delay;
+  }
+
+  /**
+   * Evict oldest completed/failed jobs when the Map exceeds the cap
+   */
+  _evictCompletedJobs() {
+    const terminal = [];
+    for (const [id, job] of this.jobs) {
+      if (job.state === 'completed' || job.state === 'failed') {
+        terminal.push({ id, timestamp: job.timestamp });
+      }
+    }
+    if (terminal.length <= this._maxCompletedJobs) return;
+
+    // Sort oldest-first, evict the excess
+    terminal.sort((a, b) => a.timestamp - b.timestamp);
+    const toEvict = terminal.length - this._maxCompletedJobs;
+    for (let i = 0; i < toEvict; i++) {
+      this.jobs.delete(terminal[i].id);
+    }
   }
 
   on(event, handler) {

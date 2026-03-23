@@ -87,10 +87,13 @@ class TokenTracker {
       return 0;
     }
 
-    const inputCost = (job.inputTokens / 1_000_000) * pricing.input_cost_per_1m;
-    const outputCost = (job.outputTokens / 1_000_000) * pricing.output_cost_per_1m;
+    const inputTokens = Number(job.inputTokens) || 0;
+    const outputTokens = Number(job.outputTokens) || 0;
+    const inputCost = (inputTokens / 1_000_000) * (pricing.input_cost_per_1m || 0);
+    const outputCost = (outputTokens / 1_000_000) * (pricing.output_cost_per_1m || 0);
     const subtotal = inputCost + outputCost;
-    return subtotal * (1 + this.bufferPercentage);
+    const result = subtotal * (1 + (this.bufferPercentage || 0));
+    return isFinite(result) ? result : 0;
   }
 
   calculateTotalCost() {

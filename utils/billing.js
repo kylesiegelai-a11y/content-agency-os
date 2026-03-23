@@ -213,20 +213,26 @@ async function listInvoices(filters = {}) {
 }
 
 function recalcSummary(invoices) {
+  // Guard helper: coerce to non-negative finite number to prevent NaN/negative drift
+  const safeTotal = (inv) => {
+    const val = Number(inv.total);
+    return (isFinite(val) && val >= 0) ? val : 0;
+  };
+
   const totalInvoiced = invoices
     .filter(inv => inv.status !== INVOICE_STATUS.CANCELLED && inv.status !== INVOICE_STATUS.REFUNDED)
-    .reduce((sum, inv) => sum + inv.total, 0);
+    .reduce((sum, inv) => sum + safeTotal(inv), 0);
   const totalPaid = invoices
     .filter(inv => inv.status === INVOICE_STATUS.PAID)
-    .reduce((sum, inv) => sum + inv.total, 0);
+    .reduce((sum, inv) => sum + safeTotal(inv), 0);
   const totalOutstanding = invoices
     .filter(inv => [INVOICE_STATUS.DRAFT, INVOICE_STATUS.SENT, INVOICE_STATUS.OVERDUE].includes(inv.status))
-    .reduce((sum, inv) => sum + inv.total, 0);
+    .reduce((sum, inv) => sum + safeTotal(inv), 0);
 
   return {
-    totalInvoiced: parseFloat(totalInvoiced.toFixed(2)),
-    totalPaid: parseFloat(totalPaid.toFixed(2)),
-    totalOutstanding: parseFloat(totalOutstanding.toFixed(2)),
+    totalInvoiced: Math.round(totalInvoiced * 100) / 100,
+    totalPaid: Math.round(totalPaid * 100) / 100,
+    totalOutstanding: Math.round(totalOutstanding * 100) / 100,
     count: invoices.length,
     countByStatus: {
       draft: invoices.filter(inv => inv.status === INVOICE_STATUS.DRAFT).length,

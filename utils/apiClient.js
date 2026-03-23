@@ -178,10 +178,19 @@ class ApiClient {
       // Handle streaming response
       if (stream && response[Symbol.asyncIterator]) {
         let fullText = '';
-        for await (const event of response) {
-          if (event.type === 'content_block_delta' && event.delta?.text) {
-            fullText += event.delta.text;
+        try {
+          for await (const event of response) {
+            if (event.type === 'content_block_delta' && event.delta?.text) {
+              fullText += event.delta.text;
+            }
           }
+        } catch (streamError) {
+          // Attempt to drain/close the stream to free resources
+          try {
+            if (typeof response.return === 'function') await response.return();
+            else if (typeof response.controller?.abort === 'function') response.controller.abort();
+          } catch (_drainErr) { /* best-effort cleanup */ }
+          throw streamError;
         }
         response = {
           content: [{ type: 'text', text: fullText }],

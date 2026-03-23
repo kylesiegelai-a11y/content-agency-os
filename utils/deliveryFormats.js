@@ -276,12 +276,15 @@ function generatePDF(filePrefix, content, brand) {
 
   return new Promise((resolve, reject) => {
     try {
+      // Sanitize metadata strings: strip control chars that can corrupt PDF metadata
+      const sanitizeMeta = (str) => (str || '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 255);
+
       const doc = new PDFDocument({
         size: 'LETTER',
         margins: { top: 72, bottom: 72, left: 72, right: 72 },
         info: {
-          Title: content.title || 'Untitled',
-          Author: brand.companyName,
+          Title: sanitizeMeta(content.title) || 'Untitled',
+          Author: sanitizeMeta(brand.companyName),
           Creator: 'Content Agency OS'
         }
       });

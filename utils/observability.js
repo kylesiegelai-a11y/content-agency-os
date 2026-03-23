@@ -33,6 +33,8 @@ const ALERT_THRESHOLDS = {
 };
 
 // Track in-memory for the current process
+// NOTE: All mutations (recordJobResult, fireAlert) are synchronous within a single
+// event-loop tick, so no async interleaving can produce inconsistent snapshots.
 const processMetrics = {
   startedAt: new Date().toISOString(),
   jobsProcessed: 0,
@@ -42,6 +44,22 @@ const processMetrics = {
   consecutiveFailures: 0,
   alerts: []
 };
+
+/**
+ * Return a frozen snapshot of current metrics to prevent callers from
+ * accidentally mutating the live counters.
+ */
+function getMetricsSnapshot() {
+  return Object.freeze({
+    startedAt: processMetrics.startedAt,
+    jobsProcessed: processMetrics.jobsProcessed,
+    jobsFailed: processMetrics.jobsFailed,
+    agentErrors: { ...processMetrics.agentErrors },
+    lastError: processMetrics.lastError ? { ...processMetrics.lastError } : null,
+    consecutiveFailures: processMetrics.consecutiveFailures,
+    alertCount: processMetrics.alerts.length
+  });
+}
 
 // ═════════════════════════════════════════════════════════════════════
 // 1. HEALTH MONITOR
@@ -426,5 +444,6 @@ module.exports = {
   restoreBackup,
 
   // Internal
-  processMetrics
+  processMetrics,
+  getMetricsSnapshot
 };

@@ -13,7 +13,30 @@ const logger = require('./logger');
 class Storage {
   constructor(dataDir = './data') {
     this.dataDir = dataDir;
+    this._fileLocks = new Map(); // Per-file async mutex for read-modify-write operations
     this.ensureDataDir();
+  }
+
+  /**
+   * Serialize async read-modify-write operations on the same file
+   * to prevent interleaved writes from overwriting each other.
+   * @param {string} fileName - File to lock
+   * @param {Function} fn - Critical section (async)
+   */
+  async _withFileLock(fileName, fn) {
+    let release;
+    const next = new Promise(resolve => { release = resolve; });
+    const prev = this._fileLocks.get(fileName) || Promise.resolve();
+    this._fileLocks.set(fileName, next);
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      release();
+      if (this._fileLocks.get(fileName) === next) {
+        this._fileLocks.delete(fileName);
+      }
+    }
   }
 
   ensureDataDir() {
@@ -135,30 +158,32 @@ class Storage {
   }
 
   async updateById(fileName, id, updates, idField = 'id') {
-    try {
-      const data = await this.read(fileName);
-      let items = data;
-      let isWrapped = false;
-      if (!Array.isArray(data)) {
-        if (Array.isArray(data.items)) {
-          items = data.items;
-          isWrapped = true;
-        } else {
-          throw new Error(`Cannot update in ${fileName}: no array found`);
+    return this._withFileLock(fileName, async () => {
+      try {
+        const data = await this.read(fileName);
+        let items = data;
+        let isWrapped = false;
+        if (!Array.isArray(data)) {
+          if (Array.isArray(data.items)) {
+            items = data.items;
+            isWrapped = true;
+          } else {
+            throw new Error(`Cannot update in ${fileName}: no array found`);
+          }
         }
+        const index = items.findIndex(item => item[idField] === id);
+        if (index === -1) {
+          throw new Error(`Item with ${idField}=${id} not found in ${fileName}`);
+        }
+        items[index] = { ...items[index], ...updates, updated_at: new Date().toISOString() };
+        const result = isWrapped ? { ...data, items } : items;
+        await this.write(fileName, result);
+        return items[index];
+      } catch (err) {
+        logger.error(`Error updating item in ${fileName}`, err);
+        throw err;
       }
-      const index = items.findIndex(item => item[idField] === id);
-      if (index === -1) {
-        throw new Error(`Item with ${idField}=${id} not found in ${fileName}`);
-      }
-      items[index] = { ...items[index], ...updates, updated_at: new Date().toISOString() };
-      const result = isWrapped ? { ...data, items } : items;
-      await this.write(fileName, result);
-      return items[index];
-    } catch (err) {
-      logger.error(`Error updating item in ${fileName}`, err);
-      throw err;
-    }
+    });
   }
 
   async deleteById(fileName, id, idField = 'id') {

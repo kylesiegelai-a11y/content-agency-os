@@ -296,6 +296,9 @@ const jobs = {
   },
 
   update(id, updates) {
+    // NOTE: sql.js is synchronous within a single Node.js event-loop tick, so
+    // the read→merge→write below is atomic as long as callers don't yield between
+    // calls.  We re-read inside the same sync block to prevent stale-data merges.
     const job = this.getById(id);
     if (!job) return null;
 

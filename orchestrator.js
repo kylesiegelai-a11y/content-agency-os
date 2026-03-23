@@ -102,8 +102,10 @@ class Orchestrator {
     this.agents = {};
     this.activityLog = [];
     this.maxRetries = config.maxRetries !== undefined ? config.maxRetries : 3;
+    this.maxCumulativeRetries = config.maxCumulativeRetries || 10; // Cap total retries across DLQ cycles
     this.deadLetterQueueSize = config.deadLetterQueueSize || 100;
     this.deadLetterQueue = [];
+    this._transitionLocks = new Map(); // Per-job locks to prevent concurrent state transitions
   }
 
   /**
@@ -386,6 +388,30 @@ class Orchestrator {
   async transitionJob(job, nextState, result = {}) {
     const { id, state } = job;
 
+    // Per-job mutex: serialize state transitions to prevent concurrent overwrites
+    const prevLock = this._transitionLocks.get(id) || Promise.resolve();
+    let releaseLock;
+    const lockPromise = new Promise(resolve => { releaseLock = resolve; });
+    this._transitionLocks.set(id, lockPromise);
+
+    try {
+      await prevLock;
+      return await this._doTransition(job, nextState, result);
+    } finally {
+      releaseLock();
+      // Clean up lock entry if no further transitions are queued
+      if (this._transitionLocks.get(id) === lockPromise) {
+        this._transitionLocks.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Internal transition logic (called under per-job lock)
+   */
+  async _doTransition(job, nextState, result = {}) {
+    const { id, state } = job;
+
     if (!this.canTransitionTo(state, nextState)) {
       logger.error('Invalid state transition', { jobId: id, from: state, to: nextState, event: 'transition_rejected' });
       return false;
@@ -493,24 +519,42 @@ class Orchestrator {
    */
   async moveToDeadLetterQueue(job, error) {
     const { id, state } = job;
+    const previousState = state;
 
     job.state = JOB_STATES.DEAD_LETTER;
     job.failureReason = error.message;
     job.failureTime = new Date();
     job.originalState = state;
+    job.cumulativeRetryCount = (job.cumulativeRetryCount || 0) + (job.retryCount || 0);
+
+    // Record transition for audit trail (mirrors transitionJob logging)
+    job.lastTransition = {
+      from: previousState,
+      to: JOB_STATES.DEAD_LETTER,
+      timestamp: new Date(),
+      result: { error: error.message }
+    };
 
     this.deadLetterQueue.push(job);
     if (this.deadLetterQueue.length > this.deadLetterQueueSize) {
       this.deadLetterQueue.shift(); // Evict oldest (FIFO) so newest failures are retained
     }
 
-    this._logActivity('JOB_DEAD_LETTER', {
+    this._logActivity('STATE_TRANSITION', {
       jobId: id,
-      originalState: state,
+      from: previousState,
+      to: JOB_STATES.DEAD_LETTER,
       error: error.message
     });
 
-    logger.error('Job moved to dead letter queue', { jobId: id, originalState: state, error: error.message, event: 'dead_letter' });
+    this._logActivity('JOB_DEAD_LETTER', {
+      jobId: id,
+      originalState: previousState,
+      error: error.message,
+      cumulativeRetries: job.cumulativeRetryCount
+    });
+
+    logger.error('Job moved to dead letter queue', { jobId: id, originalState: previousState, error: error.message, event: 'dead_letter' });
 
     return true;
   }
@@ -672,18 +716,37 @@ class Orchestrator {
       return false;
     }
 
-    const job = this.deadLetterQueue.splice(index, 1)[0];
-    job.state = job.originalState || JOB_STATES.DISCOVERED;
+    const job = this.deadLetterQueue[index];
+
+    // Enforce cumulative retry cap to prevent infinite DLQ retry loops
+    const cumulativeRetries = (job.cumulativeRetryCount || 0) + (job.retryCount || 0);
+    if (cumulativeRetries >= this.maxCumulativeRetries) {
+      logger.warn('DLQ retry rejected: cumulative retry cap exceeded', {
+        jobId, cumulativeRetries, cap: this.maxCumulativeRetries, event: 'dlq_retry_cap'
+      });
+      return { rejected: true, reason: 'cumulative_retry_cap_exceeded', cumulativeRetries };
+    }
+
+    this.deadLetterQueue.splice(index, 1);
+
+    // Restore to originalState only if it has a valid agent route; otherwise DISCOVERED
+    const restoredState = (job.originalState && AGENT_ROUTES[job.originalState])
+      ? job.originalState
+      : JOB_STATES.DISCOVERED;
+
+    job.state = restoredState;
     job.failureReason = null;
     job.failureTime = null;
-    job.retryCount = 0;
+    job.cumulativeRetryCount = cumulativeRetries;
+    job.retryCount = 0; // Reset per-cycle retries only
 
     this._logActivity('DEAD_LETTER_RETRY', {
       jobId,
-      restoredState: job.state
+      restoredState: job.state,
+      cumulativeRetries
     });
 
-    logger.info('Retrying dead letter job', { jobId, event: 'dead_letter_retry' });
+    logger.info('Retrying dead letter job', { jobId, restoredState, cumulativeRetries, event: 'dead_letter_retry' });
 
     return this.routeJob(job);
   }

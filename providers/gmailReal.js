@@ -249,6 +249,11 @@ class GmailRealProvider {
    */
   async watchInbox(callback) {
     if (typeof callback === 'function') {
+      // Cap watch callbacks to prevent unbounded growth from repeated registrations
+      if (this.watchCallbacks.length >= 50) {
+        logger.warn('[GmailReal] watchCallbacks cap reached (50), removing oldest');
+        this.watchCallbacks.shift();
+      }
       this.watchCallbacks.push(callback);
     }
 

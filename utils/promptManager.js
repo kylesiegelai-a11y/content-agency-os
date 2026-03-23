@@ -105,14 +105,21 @@ class PromptManager {
       return promptVersions[version];
     }
 
-    // Return latest version
+    // Return latest version (supports non-numeric segments like "1.0-beta")
     const versions = Object.keys(promptVersions).sort((a, b) => {
-      const aParts = a.split('.').map(Number);
-      const bParts = b.split('.').map(Number);
+      const aParts = a.split('.');
+      const bParts = b.split('.');
       for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-        const aVal = aParts[i] || 0;
-        const bVal = bParts[i] || 0;
-        if (aVal !== bVal) return bVal - aVal;
+        const aNum = parseInt(aParts[i], 10);
+        const bNum = parseInt(bParts[i], 10);
+        // Both segments are valid numbers: compare numerically
+        if (!isNaN(aNum) && !isNaN(bNum) && aNum !== bNum) return bNum - aNum;
+        // Fallback to lexicographic comparison for non-numeric segments
+        if (isNaN(aNum) || isNaN(bNum)) {
+          const aStr = aParts[i] || '';
+          const bStr = bParts[i] || '';
+          if (aStr !== bStr) return bStr.localeCompare(aStr);
+        }
       }
       return 0;
     });
@@ -164,12 +171,17 @@ class PromptManager {
     if (versions.length === 0) return null;
 
     return versions.sort((a, b) => {
-      const aParts = a.split('.').map(Number);
-      const bParts = b.split('.').map(Number);
+      const aParts = a.split('.');
+      const bParts = b.split('.');
       for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
-        const aVal = aParts[i] || 0;
-        const bVal = bParts[i] || 0;
-        if (aVal !== bVal) return bVal - aVal;
+        const aNum = parseInt(aParts[i], 10);
+        const bNum = parseInt(bParts[i], 10);
+        if (!isNaN(aNum) && !isNaN(bNum) && aNum !== bNum) return bNum - aNum;
+        if (isNaN(aNum) || isNaN(bNum)) {
+          const aStr = aParts[i] || '';
+          const bStr = bParts[i] || '';
+          if (aStr !== bStr) return bStr.localeCompare(aStr);
+        }
       }
       return 0;
     })[0];
