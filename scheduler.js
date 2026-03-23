@@ -7,7 +7,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
-const storage = require('./utils/storage');
+const { storage } = require('./utils/storage');
 
 class Scheduler extends EventEmitter {
   constructor(orchestrator, config = {}) {

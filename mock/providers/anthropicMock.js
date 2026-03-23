@@ -123,29 +123,21 @@ I'm available to start immediately and can provide references from previous clie
 Looking forward to working with you!`,
 
   scorer: {
-    overall_quality: 8.5,
-    relevance: 9.2,
-    completeness: 8.1,
-    accuracy: 8.7,
-    clarity: 8.9,
-    actionability: 7.8,
-    timeliness: 8.4,
-    engagement_potential: 8.6,
-    seo_optimization: 7.9,
-    brand_alignment: 9.0,
-    comments: [
-      "Strong opening with clear value proposition",
-      "Good use of specific metrics and examples",
-      "Could benefit from more specific call-to-action",
-      "Excellent structure and readability",
-      "Appropriate tone for target audience"
+    opportunityId: "opp-mock-001",
+    title: "Mock Opportunity Scoring",
+    skillMatch: 85,
+    budgetAdequacy: 78,
+    timelineFeasibility: 90,
+    competitionLevel: 65,
+    overallScore: 82,
+    recommendedBid: 2500,
+    bidRange: { min: 2000, max: 3000 },
+    winningLikelihood: "high",
+    riskFactors: [
+      "Competitive niche with 5+ bidders",
+      "Tight timeline may require overtime"
     ],
-    recommendations: [
-      "Add section on measurement/KPIs",
-      "Include specific timeline deliverables",
-      "Consider adding social proof elements",
-      "Strengthen closing with clear next steps"
-    ]
+    recommendation: "Proceed with bid — strong skill match and adequate budget"
   },
 
   researcher: {
@@ -200,39 +192,52 @@ Looking forward to working with you!`,
   },
 
   editor: {
-    overall_quality: 8.7,
-    edits_made: 12,
-    categories: { grammar: 3, clarity: 5, style: 2, structure: 2 },
-    improved_content: "The edited and improved version of the content with all suggested changes applied.",
-    suggestions: [
-      "Strengthen the opening paragraph hook",
-      "Add transition sentences between sections",
-      "Include more specific data points"
+    clarity: 88,
+    grammar: 95,
+    toneConsistency: 85,
+    seoScore: 82,
+    audienceAlignment: 90,
+    overallScore: 87,
+    issues: [
+      { type: "grammar", severity: "minor", location: "paragraph 3", description: "Subject-verb agreement" },
+      { type: "clarity", severity: "minor", location: "paragraph 5", description: "Sentence too complex" }
+    ],
+    improvements: [
+      { priority: "medium", suggestion: "Strengthen opening hook", rationale: "First impression matters for engagement" },
+      { priority: "low", suggestion: "Add transition sentences", rationale: "Improve flow between sections" }
+    ],
+    seoRecommendations: [
+      "Add meta description targeting primary keyword",
+      "Include alt text for any images",
+      "Strengthen H2 subheadings with keywords"
     ]
   },
 
-  humanizer: {
-    humanized_content: "The humanized version of the content with natural language patterns, varied sentence structure, and conversational elements added.",
-    changes_made: 8,
-    readability_score: 72,
-    ai_detection_score: 15,
-    techniques_applied: ["varied sentence length", "added colloquialisms", "natural transitions", "personal anecdotes"]
-  },
+  humanizer: `Look, here's the thing about cloud infrastructure that nobody tells you — it's not just about throwing more servers at the problem.
+
+When I first started scaling our platform, I made every mistake in the book. We'd see traffic spike, panic-deploy a few extra instances, and pray. Sound familiar?
+
+The real game-changer was shifting to a proactive mindset. Instead of reacting to load, we started anticipating it. Auto-scaling policies, predictive metrics, the works.
+
+Here's what actually moved the needle for us: we stopped treating infrastructure as a cost center and started treating it as a competitive advantage. Every millisecond of latency we shaved off translated directly to user retention.
+
+The bottom line? Cloud scaling isn't a technical problem — it's a strategic one. Get the strategy right, and the technical pieces fall into place naturally.`,
 
   qa: {
+    contentType: "blog_post",
+    assessmentDate: new Date().toISOString(),
+    criteria: [
+      { name: "accuracy", weight: 0.3, score: 88, justification: "Strong factual grounding with relevant examples" },
+      { name: "clarity", weight: 0.3, score: 90, justification: "Clear and well-structured prose" },
+      { name: "engagement", weight: 0.2, score: 85, justification: "Good hooks and flow" },
+      { name: "seo", weight: 0.2, score: 82, justification: "Keyword placement could improve" }
+    ],
+    overallScore: 87,
     passed: true,
-    overall_score: 87,
-    checks: {
-      grammar: { score: 95, issues: 1 },
-      factual_accuracy: { score: 88, issues: 2 },
-      brand_alignment: { score: 90, issues: 0 },
-      seo_optimization: { score: 82, issues: 3 },
-      readability: { score: 85, issues: 1 }
-    },
-    recommendations: [
-      "Verify statistic in paragraph 3",
-      "Consider adding alt text to images",
-      "Strengthen meta description"
+    threshold: 75,
+    revisionNotes: [
+      { area: "SEO", issue: "Primary keyword missing from H2", priority: "medium", recommendation: "Add target keyword to at least one H2" },
+      { area: "Engagement", issue: "Closing CTA is weak", priority: "low", recommendation: "Strengthen call-to-action with specific next step" }
     ]
   },
 
@@ -288,14 +293,26 @@ function createApiResponse(text, model = 'claude-3-5-sonnet-20241022', stopReaso
 function getMockContentByType(type) {
   const lowerType = (type || 'default').toLowerCase();
 
-  // Return JSON string for structured types, plain text for content types
-  const jsonTypes = ['scorer', 'researcher', 'brief', 'editor', 'humanizer', 'qa', 'outreach'];
+  // Map agent type names to mock content keys
+  const typeMap = {
+    qualitygate: 'qa',
+    humanization: 'humanizer',
+    opportunityscorer: 'scorer',
+    clientbrief: 'brief',
+    coldoutreach: 'outreach',
+    proposalwriter: 'proposal'
+  };
 
-  if (mockContent[lowerType]) {
-    if (jsonTypes.includes(lowerType)) {
-      return JSON.stringify(mockContent[lowerType], null, 2);
+  const resolvedType = typeMap[lowerType] || lowerType;
+
+  // Return JSON string for structured types, plain text for content types
+  const jsonTypes = ['scorer', 'researcher', 'brief', 'editor', 'qa', 'outreach'];
+
+  if (mockContent[resolvedType]) {
+    if (jsonTypes.includes(resolvedType)) {
+      return JSON.stringify(mockContent[resolvedType], null, 2);
     }
-    return mockContent[lowerType];
+    return mockContent[resolvedType];
   }
 
   // Default fallback

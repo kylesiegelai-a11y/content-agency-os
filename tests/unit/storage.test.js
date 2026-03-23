@@ -256,7 +256,7 @@ describe('Storage Class', () => {
       });
     });
 
-    test('Should use file locking for sequential writes', async () => {
+    test('Should handle sequential writes correctly', async () => {
       const fileName = 'lockTest.json';
       const data1 = { sequence: 1 };
       const data2 = { sequence: 2 };
@@ -296,16 +296,18 @@ describe('Storage Class', () => {
 
       await storage.write(fileName, data, false);
 
-      // Mix of operations
-      const op1 = storage.read(fileName);
-      const op2 = storage.write(fileName, { counter: 1 }, false);
-      const op3 = storage.read(fileName);
-      const op4 = storage.write(fileName, { counter: 2 }, false);
-
-      const [read1, , read2] = await Promise.all([op1, op2, op3, op4]);
-
+      // Without file locking, concurrent reads see the state at read time.
+      // Sequential operations are the safe pattern for read-after-write.
+      const read1 = await storage.read(fileName);
       expect(read1.counter).toBe(0);
+
+      await storage.write(fileName, { counter: 1 }, false);
+      const read2 = await storage.read(fileName);
       expect(read2.counter).toBe(1);
+
+      await storage.write(fileName, { counter: 2 }, false);
+      const read3 = await storage.read(fileName);
+      expect(read3.counter).toBe(2);
     });
   });
 

@@ -185,49 +185,39 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
  */
 app.get('/api/jobs', authenticateToken, async (req, res) => {
   try {
-    const { state, queue, limit = 50 } = req.query;
+    const { state, limit = 50 } = req.query;
 
+    // Use jobs.json as the canonical job store (written by orchestrator._persistJob)
+    const { readData } = require('./utils/storage');
+    let jobsData = await readData('jobs.json');
+    if (!jobsData) jobsData = { jobs: [] };
+    let jobs = jobsData.jobs || [];
+
+    // Filter by workflow state if requested
+    if (state) {
+      jobs = jobs.filter(j => j.state === state);
+    }
+
+    // Apply limit
+    jobs = jobs.slice(0, parseInt(limit, 10));
+
+    // Enrich with queue stats
     const stats = await appState.orchestrator.getQueueStats();
-    const jobs = [];
-
-    // Fetch jobs from specific queue or all queues
-    const queuesToCheck = queue
-      ? [appState.queues[queue]]
-      : Object.values(appState.queues);
-
-    for (const q of queuesToCheck) {
-      if (!q) continue;
-
-      const statesToCheck = state ? [state] : ['waiting', 'active', 'completed', 'failed'];
-      const queueJobs = await q.getJobs(statesToCheck);
-
-      jobs.push(...queueJobs.slice(0, limit));
-    }
-
-    // Deduplicate by logical job ID — keep the latest state for each
-    const jobMap = new Map();
-    for (const j of jobs) {
-      const logicalId = j.data?.id || j.id;
-      const existing = jobMap.get(logicalId);
-      // Keep the most recent entry (by timestamp)
-      if (!existing || (j.timestamp || 0) >= (existing.timestamp || 0)) {
-        jobMap.set(logicalId, j);
-      }
-    }
-    const dedupedJobs = Array.from(jobMap.values());
 
     res.json({
       success: true,
-      jobs: dedupedJobs.map(j => ({
-        id: j.data?.id || j.id,
-        queueState: j.state,
-        workflowState: j.data?.state || 'unknown',
-        priority: j.priority,
-        progress: j.progress || 0,
-        createdAt: j.timestamp || j.createdAt,
-        data: j.data
+      jobs: jobs.map(j => ({
+        id: j.id,
+        workflowState: j.state || 'unknown',
+        title: j.title || j.topic || '',
+        priority: j.priority || 0,
+        createdAt: j.createdAt,
+        completedAt: j.completedAt || null,
+        completionStatus: j.completionStatus || null,
+        retryCount: j.retryCount || 0,
+        lastTransition: j.lastTransition || null
       })),
-      total: dedupedJobs.length,
+      total: jobs.length,
       stats
     });
   } catch (error) {
@@ -277,8 +267,33 @@ app.get('/api/jobs/:jobId', authenticateToken, async (req, res) => {
   try {
     const { jobId } = req.params;
 
-    const status = await appState.orchestrator.getJobStatus(jobId);
+    // Look up in canonical jobs.json first
+    const { readData } = require('./utils/storage');
+    let jobsData = await readData('jobs.json');
+    const jobs = (jobsData && jobsData.jobs) || [];
+    const job = jobs.find(j => j.id === jobId);
 
+    if (job) {
+      return res.json({
+        success: true,
+        job: {
+          found: true,
+          id: job.id,
+          workflowState: job.state,
+          title: job.title || job.topic || '',
+          priority: job.priority || 0,
+          createdAt: job.createdAt,
+          completedAt: job.completedAt || null,
+          completionStatus: job.completionStatus || null,
+          retryCount: job.retryCount || 0,
+          lastTransition: job.lastTransition || null,
+          agentResults: job.agentResults || {}
+        }
+      });
+    }
+
+    // Fallback: check queue state
+    const status = await appState.orchestrator.getJobStatus(jobId);
     if (!status.found) {
       return res.status(404).json({ error: 'Job not found' });
     }
@@ -829,7 +844,7 @@ app.post('/api/pipeline/run', authenticateToken, async (req, res) => {
     await appState.scheduler._runPipelineCycle();
 
     // Log to activity using append (avoids read+write contention)
-    const storage = require('./utils/storage');
+    const { storage } = require('./utils/storage');
     await storage.append('activity.json', {
       timestamp: new Date().toISOString(),
       agent: 'system',
@@ -978,13 +993,15 @@ async function startServer() {
 
     // Initialize required JSON data stores
     console.log('[Server] Initializing data stores...');
-    const storage = require('./utils/storage');
+    const { storage } = require('./utils/storage');
     const dataStores = {
       'activity.json': { activities: [] },
       'jobs.json': { jobs: [] },
       'metrics.json': { totalEarnings: 0, totalJobs: 0, activeJobs: 0, completedJobs: 0 },
       'portfolio.json': { items: [] },
-      'approvals.json': { items: [] }
+      'approvals.json': { items: [] },
+      'niches.json': { niches: {} },
+      'ledger.json': { transactions: [], total: 0 }
     };
     for (const [fileName, defaultContent] of Object.entries(dataStores)) {
       await storage.initialize(fileName, defaultContent);
@@ -997,7 +1014,7 @@ async function startServer() {
     // Initialize orchestrator
     console.log('[Server] Initializing orchestrator...');
     appState.orchestrator = new Orchestrator(appState.queues, {
-      maxRetries: process.env.MAX_RETRIES || 3
+      maxRetries: process.env.MAX_RETRIES !== undefined ? parseInt(process.env.MAX_RETRIES, 10) : 3
     });
 
     // Register queue processors — this wires queues to the orchestrator

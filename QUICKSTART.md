@@ -16,10 +16,11 @@ cp .env.example .env
 # Just run with defaults - MOCK_MODE=true is recommended
 ```
 
-### 3. Create Data Directory
+### 3. Run Tests
 ```bash
-mkdir -p data
+npm test
 ```
+All 195+ tests should pass, including E2E pipeline tests.
 
 ### 4. Start Server
 ```bash
@@ -183,9 +184,11 @@ MOCK_MODE=true npm start
 
 Mock mode features:
 - In-memory job queue (no Redis)
-- Automatic job processing
+- Deterministic mock AI responses matching each agent's expected schema
+- Transition guards validate agent output before state advances
+- Structured logging via Winston (jobId, agent, state, event fields)
+- Data stores auto-bootstrap on first run (no manual `mkdir` needed)
 - Full API functionality
-- Perfect for development and testing
 - Zero external service dependencies
 
 ## Running with Production Redis

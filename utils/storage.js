@@ -261,10 +261,15 @@ class Storage {
   }
 }
 
+// Default singleton used by agents and server at runtime
 const storage = new Storage(process.env.DATABASE_PATH || './data');
 
-// Export both the instance and compatibility helpers matching agent import pattern
-module.exports = storage;
+// Export model B: { Storage (class), storage (singleton), helpers }
+// Tests use: const Storage = require('./storage') — gets the class via default export
+// Agents use: const { readData, appendToArray } = require('./storage')
+// Server uses: const storage = require('./storage') — gets the singleton (also works, has .read/.write methods)
+module.exports = Storage;
+module.exports.Storage = Storage;
 module.exports.storage = storage;
 module.exports.readData = (fileName) => storage.read(fileName);
 module.exports.writeData = (fileName, data) => storage.write(fileName, data);

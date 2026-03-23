@@ -33,7 +33,13 @@ class TokenTracker {
     this.bufferPercentage = 0.15;
   }
 
+  /**
+   * Initialize a job tracker. Idempotent — returns existing tracker if already initialized.
+   */
   initializeJob(jobId, model = 'claude_haiku') {
+    if (this.jobTrackers[jobId]) {
+      return this.jobTrackers[jobId];
+    }
     this.jobTrackers[jobId] = {
       jobId,
       model,

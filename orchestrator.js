@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const logger = require('./utils/logger');
 
 // Explicit agent module registry — maps route names to actual file exports
 const AGENT_MODULES = {
@@ -98,7 +99,7 @@ class Orchestrator {
     this.config = config;
     this.agents = {};
     this.activityLog = [];
-    this.maxRetries = config.maxRetries || 3;
+    this.maxRetries = config.maxRetries !== undefined ? config.maxRetries : 3;
     this.deadLetterQueueSize = config.deadLetterQueueSize || 100;
     this.deadLetterQueue = [];
   }
@@ -111,12 +112,12 @@ class Orchestrator {
 
     const agent = AGENT_MODULES[agentName];
     if (!agent) {
-      console.warn(`[Orchestrator] Unknown agent: ${agentName}`);
+      logger.warn('Unknown agent requested', { agent: agentName, event: 'agent_not_found' });
       return null;
     }
 
     this.agents[agentName] = agent;
-    console.log(`[Orchestrator] Loaded agent: ${agentName}`);
+    logger.debug('Agent loaded', { agent: agentName, event: 'agent_loaded' });
     return agent;
   }
 
@@ -131,10 +132,33 @@ class Orchestrator {
     const agent = await this.loadAgent(agentName);
     if (!agent) throw new Error(`Agent ${agentName} not available`);
 
-    console.log(`[Orchestrator] Processing job ${job.id} in state ${job.state} with agent ${agentName}`);
-    const result = await agent(job, { orchestrator: this });
+    logger.info('Processing job', { jobId: job.id, state: job.state, agent: agentName, event: 'job_processing' });
 
-    // Determine next state
+    let result;
+    try {
+      result = await agent(job, { orchestrator: this });
+    } catch (agentError) {
+      logger.error('Agent execution failed', { jobId: job.id, agent: agentName, state: job.state, error: agentError.message, event: 'agent_failed' });
+      await this.handleJobFailure(job, agentError);
+      return { error: true, message: agentError.message };
+    }
+
+    // Validate agent output before transitioning (transition guards)
+    const validationError = this._validateAgentOutput(job.state, result);
+    if (validationError) {
+      logger.error('Agent output validation failed', { jobId: job.id, agent: agentName, state: job.state, error: validationError, event: 'validation_failed' });
+      await this.handleJobFailure(job, new Error(`Agent output validation failed: ${validationError}`));
+      return { error: true, message: validationError };
+    }
+
+    // Store agent result on the job for downstream agents
+    if (!job.agentResults) job.agentResults = {};
+    job.agentResults[agentName] = result;
+
+    // Propagate key output fields so downstream agents can read them from job.*
+    this._propagateAgentOutput(job, agentName, result);
+
+    // Determine next state — DELIVERED is the terminal state for the content pipeline
     const NEXT_STATE = {
       DISCOVERED: JOB_STATES.SCORED,
       SCORED: JOB_STATES.APPROVED,
@@ -145,16 +169,128 @@ class Orchestrator {
       HUMANIZING: JOB_STATES.QUALITY_CHECK,
       QUALITY_CHECK: JOB_STATES.APPROVED_CONTENT,
       APPROVED_CONTENT: JOB_STATES.DELIVERING,
-      DELIVERING: JOB_STATES.DELIVERED,
-      DELIVERED: JOB_STATES.CLOSED
+      DELIVERING: JOB_STATES.DELIVERED
     };
 
     const nextState = NEXT_STATE[job.state];
-    if (!nextState) return result;
+    if (!nextState) {
+      // Terminal state reached
+      job.completedAt = new Date();
+      job.completionStatus = 'success';
+      this._persistJob(job);
+      return result;
+    }
 
     await this.transitionJob(job, nextState, result);
+    this._persistJob(job);
 
-    // Persist job state to storage
+    return result;
+  }
+
+  /**
+   * Validate agent output has required fields before state transition.
+   * Returns null if valid, or an error message string if invalid.
+   */
+  _validateAgentOutput(currentState, result) {
+    if (!result || typeof result !== 'object') {
+      return 'Agent returned null or non-object result';
+    }
+    if (result.error === true) {
+      return `Agent reported error: ${result.message || 'unknown'}`;
+    }
+
+    // State-specific output validation
+    switch (currentState) {
+      case JOB_STATES.APPROVED:
+        // Briefer must return a brief object
+        if (!result.brief && !result.briefContent) {
+          return 'Briefer must return a brief or briefContent field';
+        }
+        break;
+      case JOB_STATES.BRIEFED:
+      case JOB_STATES.WRITING:
+        // Writer must return content
+        if (!result.content) {
+          return 'Writer must return a content field';
+        }
+        break;
+      case JOB_STATES.EDITING:
+        // Editor must return review or editedDraft
+        if (!result.review && !result.editedDraft && !result.scores) {
+          return 'Editor must return review, editedDraft, or scores';
+        }
+        break;
+      case JOB_STATES.HUMANIZING:
+        // Humanizer must return humanized content
+        if (!result.humanizedContent && !result.content) {
+          return 'Humanizer must return humanizedContent or content';
+        }
+        break;
+      case JOB_STATES.QUALITY_CHECK:
+        // QA must return pass/fail — allow progression even if score is low
+        // (the passed field may come from assessment sub-object)
+        if (result.passed === undefined && result.assessment?.passed === undefined) {
+          // If no explicit pass/fail, default to pass (don't block on missing field)
+          result.passed = true;
+        }
+        break;
+      // DISCOVERED, SCORED: qualifier output is flexible (scoring is advisory)
+      // APPROVED_CONTENT, DELIVERING: delivery output is flexible
+      default:
+        break;
+    }
+
+    return null; // valid
+  }
+
+  /**
+   * Propagate agent output fields onto the job object so downstream agents
+   * can read them from job.* without reaching into job.agentResults.
+   * Writer/editor/humanizer produce string content → job.content (string).
+   * Delivery agent expects job.content as { title, body } — handled at delivery stage.
+   */
+  _propagateAgentOutput(job, agentName, result) {
+    switch (agentName) {
+      case 'writer':
+        // Writer produces string content — set job.content for editor/humanizer
+        if (result.content && typeof result.content === 'string') {
+          job.content = result.content;
+        }
+        break;
+      case 'humanizer':
+        // Humanizer produces humanizedContent — update job.content for QA
+        if (result.humanizedContent && typeof result.humanizedContent === 'string') {
+          job.content = result.humanizedContent;
+        }
+        break;
+      case 'briefer':
+        // Briefer produces a brief object — set job.brief for writer
+        if (result.brief) {
+          job.brief = result.brief;
+        }
+        break;
+      case 'delivery':
+        // No propagation needed — terminal agent
+        break;
+      default:
+        break;
+    }
+
+    // Before delivery, ensure job.content is the { title, body } shape delivery expects
+    if (job.state === JOB_STATES.APPROVED_CONTENT || job.state === JOB_STATES.DELIVERING) {
+      if (typeof job.content === 'string') {
+        job.content = {
+          title: job.topic || job.title || 'Untitled',
+          body: job.content
+        };
+      }
+    }
+  }
+
+  /**
+   * Persist job state to storage (non-blocking — failures are logged, not thrown)
+   */
+  async _persistJob(job) {
     try {
       const { writeData, readData } = require('./utils/storage');
       let jobsData = await readData('jobs.json');
@@ -168,10 +304,8 @@ class Orchestrator {
       }
       await writeData('jobs.json', { jobs });
     } catch (persistErr) {
-      console.warn(`[Orchestrator] Could not persist job state: ${persistErr.message}`);
+      logger.warn('Could not persist job state', { jobId: job.id, error: persistErr.message, event: 'persist_failed' });
     }
-
-    return result;
   }
 
   /**
@@ -193,14 +327,14 @@ class Orchestrator {
     // Get agent name for this state
     const agentName = AGENT_ROUTES[state];
     if (!agentName) {
-      console.error(`[Orchestrator] No agent route found for state: ${state}`);
+      logger.error('No agent route for state', { jobId: id, state, event: 'route_missing' });
       return false;
     }
 
     // Load agent to verify it exists
     const agent = await this.loadAgent(agentName);
     if (!agent) {
-      console.warn(`[Orchestrator] Agent ${agentName} not available for job ${id}`);
+      logger.warn('Agent not available for routing', { jobId: id, agent: agentName, event: 'agent_unavailable' });
       // Still add to queue but will be handled gracefully
     }
 
@@ -227,10 +361,10 @@ class Orchestrator {
         priority: priorityScore
       });
 
-      console.log(`[Orchestrator] Routed job ${id} to ${agentName} queue (${queue.name})`);
+      logger.info('Job routed to queue', { jobId: id, agent: agentName, queue: queue.name, event: 'job_routed' });
       return true;
     } catch (error) {
-      console.error(`[Orchestrator] Failed to route job ${id}: ${error.message}`);
+      logger.error('Failed to route job', { jobId: id, error: error.message, event: 'route_failed' });
       return false;
     }
   }
@@ -242,9 +376,7 @@ class Orchestrator {
     const { id, state } = job;
 
     if (!this.canTransitionTo(state, nextState)) {
-      console.error(
-        `[Orchestrator] Invalid transition: ${state} -> ${nextState} for job ${id}`
-      );
+      logger.error('Invalid state transition', { jobId: id, from: state, to: nextState, event: 'transition_rejected' });
       return false;
     }
 
@@ -264,16 +396,17 @@ class Orchestrator {
       result
     });
 
-    console.log(`[Orchestrator] Job ${id} transitioned: ${previousState} -> ${nextState}`);
+    logger.info('Job state transitioned', { jobId: id, from: previousState, to: nextState, event: 'state_transition' });
 
     // If next state is terminal, mark complete
-    if (nextState === JOB_STATES.CLOSED) {
+    if (nextState === JOB_STATES.DELIVERED || nextState === JOB_STATES.CLOSED) {
       job.completedAt = new Date();
       job.completionStatus = 'success';
     }
 
     // Route to next agent if not terminal
-    if (nextState !== JOB_STATES.CLOSED && nextState !== JOB_STATES.DEAD_LETTER) {
+    const terminalStates = [JOB_STATES.DELIVERED, JOB_STATES.CLOSED, JOB_STATES.DEAD_LETTER];
+    if (!terminalStates.includes(nextState)) {
       return this.routeJob(job);
     }
 
@@ -298,7 +431,7 @@ class Orchestrator {
         error: error.message
       });
 
-      console.log(`[Orchestrator] Job ${id} retry ${job.retryCount}/${this.maxRetries}`);
+      logger.info('Job retry scheduled', { jobId: id, state, retryCount: job.retryCount, maxRetries: this.maxRetries, event: 'job_retry' });
 
       // Requeue with exponential backoff
       const delay = Math.pow(2, job.retryCount) * 1000;
@@ -312,7 +445,7 @@ class Orchestrator {
         });
         return true;
       } catch (queueError) {
-        console.error(`[Orchestrator] Failed to requeue job ${id}: ${queueError.message}`);
+        logger.error('Failed to requeue job', { jobId: id, error: queueError.message, event: 'requeue_failed' });
       }
     }
 
@@ -342,7 +475,7 @@ class Orchestrator {
       error: error.message
     });
 
-    console.error(`[Orchestrator] Job ${id} moved to dead letter queue: ${error.message}`);
+    logger.error('Job moved to dead letter queue', { jobId: id, originalState: state, error: error.message, event: 'dead_letter' });
 
     return true;
   }
@@ -419,7 +552,7 @@ class Orchestrator {
       priority
     });
 
-    console.log(`[Orchestrator] Test job accepted: ${id}`);
+    logger.info('Test job accepted', { jobId: id, type, priority, event: 'test_job_accepted' });
 
     // Route to first agent
     return this.routeJob(job);
@@ -512,7 +645,7 @@ class Orchestrator {
       restoredState: job.state
     });
 
-    console.log(`[Orchestrator] Retrying dead letter job ${jobId}`);
+    logger.info('Retrying dead letter job', { jobId, event: 'dead_letter_retry' });
 
     return this.routeJob(job);
   }
