@@ -26,19 +26,13 @@ describe('Storage Class', () => {
   });
 
   afterAll(async () => {
-    // Cleanup test directory
+    // Cleanup test directory (recursive handles nested dirs and backup files)
+    // Allow a tick for any pending writes to flush before removing
+    await new Promise(r => setTimeout(r, 50));
     try {
-      const files = await fsPromises.readdir(testDataDir);
-      for (const file of files) {
-        const filePath = path.join(testDataDir, file);
-        const stat = await fsPromises.stat(filePath);
-        if (stat.isFile()) {
-          await fsPromises.unlink(filePath);
-        }
-      }
-      await fsPromises.rmdir(testDataDir);
-    } catch (err) {
-      console.warn('Cleanup error:', err.message);
+      await fsPromises.rm(testDataDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup — tmp dir will be overwritten next run regardless
     }
   });
 

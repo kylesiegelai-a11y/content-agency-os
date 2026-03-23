@@ -314,16 +314,21 @@ app.get('/api/jobs/:jobId', authenticateToken, async (req, res) => {
       return res.json({
         success: true,
         job: {
-          found: true,
           id: job.id,
-          workflowState: job.state,
+          workflowState: job.state || 'unknown',
           title: job.title || job.topic || '',
           priority: job.priority || 0,
-          createdAt: job.createdAt,
+          createdAt: job.createdAt || null,
+          updatedAt: job.lastTransition?.timestamp || job.createdAt || null,
           completedAt: job.completedAt || null,
           completionStatus: job.completionStatus || null,
           retryCount: job.retryCount || 0,
-          lastTransition: job.lastTransition || null,
+          lastError: job.lastError || null,
+          lastTransition: job.lastTransition ? {
+            from: job.lastTransition.from,
+            to: job.lastTransition.to,
+            at: job.lastTransition.timestamp
+          } : null,
           agentResults: job.agentResults || {}
         }
       });

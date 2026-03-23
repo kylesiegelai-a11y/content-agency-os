@@ -11,6 +11,7 @@
     "dashboard:install": "npm --prefix dashboard install",
     "dashboard:build": "npm --prefix dashboard run build",
     "build": "npm run dashboard:install && npm run dashboard:build",
+    "preflight": "bash scripts/preflight.sh",
     "kill-switch": "curl -X POST http://localhost:3001/api/settings/kill-switch -H 'Authorization: Bearer mock-jwt-token-for-development' -H 'Content-Type: application/json' -d '{\"enabled\": true}'"
   },
   "keywords": [
