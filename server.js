@@ -20,11 +20,19 @@ const { Scheduler } = require('./scheduler');
 
 // Configuration
 const PORT = process.env.PORT || 3001;
+
+// --- MOCK-ONLY SECURITY RELAXATIONS ---
+// In MOCK_MODE:
+//   - JWT_SECRET defaults to 'mock-dev-secret' (no env var required)
+//   - MOCK_ADMIN_TOKEN bypasses JWT verification entirely
+//   - CORS is open to all origins
+// In PRODUCTION (MOCK_MODE=false):
+//   - JWT_SECRET must be set via environment variable or server refuses to start
+//   - No mock token bypass exists
+//   - CORS restricted to CORS_ORIGIN env var
 const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? 'mock-dev-secret' : null);
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
 const MOCK_ADMIN_TOKEN = 'mock-jwt-token-for-development';
 
-// Fail fast in production mode without required secrets
 if (!MOCK_MODE && !JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required in production mode');
 }
@@ -125,28 +133,46 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 /**
- * POST /api/auth/init-password
- * Initialize admin password (first time setup)
+ * POST /api/auth/change-password
+ * Change admin password — verifies against stored bcrypt hash, not env var
  */
-app.post('/api/auth/init-password', (req, res) => {
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'Current and new passwords required' });
   }
 
-  if (currentPassword !== ADMIN_PASSWORD) {
-    return res.status(401).json({ error: 'Invalid current password' });
-  }
-
   if (newPassword.length < 8) {
     return res.status(400).json({ error: 'New password must be at least 8 characters' });
   }
 
-  // In production, this would persist the new password to a database or secret manager
-  console.log('[Auth] Password change requested (would be persisted in production)');
+  try {
+    const authFilePath = path.join(__dirname, 'data', 'auth.json');
+    if (!fs.existsSync(authFilePath)) {
+      return res.status(500).json({ error: 'Auth store not initialized. Run: node scripts/initPassword.js' });
+    }
 
-  res.json({ success: true, message: 'Password updated successfully' });
+    const authData = JSON.parse(fs.readFileSync(authFilePath, 'utf8'));
+    const isMatch = await bcrypt.compare(currentPassword, authData.masterPassword);
+
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid current password' });
+    }
+
+    // Hash and persist the new password
+    const salt = await bcrypt.genSalt(12);
+    const newHash = await bcrypt.hash(newPassword, salt);
+    authData.masterPassword = newHash;
+    authData.updatedAt = new Date().toISOString();
+    fs.writeFileSync(authFilePath, JSON.stringify(authData, null, 2));
+
+    console.log('[Auth] Password changed successfully');
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('[Auth] Password change error:', error.message);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
 });
 
 // ============================================================================
@@ -887,7 +913,7 @@ app.post('/api/dead-letter-queue/:jobId/retry', authenticateToken, async (req, r
 // STATIC FILE SERVING
 // ============================================================================
 
-// Serve built dashboard if available, fall back to raw dashboard for dev
+// Serve built dashboard from dashboard/dist
 const dashboardDist = path.join(__dirname, 'dashboard', 'dist');
 const dashboardPath = path.join(__dirname, 'dashboard');
 
@@ -899,13 +925,16 @@ if (fs.existsSync(dashboardDist)) {
     if (req.path.startsWith('/api/')) return next();
     res.sendFile(path.join(dashboardDist, 'index.html'));
   });
-} else if (fs.existsSync(dashboardPath)) {
-  console.log('[Server] Serving raw dashboard (run "npm run dashboard:build" for production)');
+} else if (MOCK_MODE && fs.existsSync(dashboardPath)) {
+  // Raw dashboard fallback — ONLY in mock/dev mode (use Vite dev server on :5173 for full frontend dev)
+  console.log('[Server] MOCK MODE: Serving raw dashboard files (use Vite dev server for frontend dev)');
   app.use(express.static(dashboardPath));
 
   app.get('/', (req, res) => {
     res.sendFile(path.join(dashboardPath, 'index.html'));
   });
+} else {
+  console.warn('[Server] WARNING: dashboard/dist not found. Run "npm run build" to build the dashboard.');
 }
 
 // ============================================================================

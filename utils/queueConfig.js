@@ -47,7 +47,7 @@ class InMemoryQueue {
 
     // If there are processors and no delay, process immediately
     if (this.processors.length > 0 && job.delay === 0) {
-      setImmediate(() => this._processJob(jobId));
+      setImmediate(() => this._processJob(queueJobId));
     }
 
     return job;
