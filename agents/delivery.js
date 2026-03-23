@@ -37,6 +37,13 @@ async function delivery(job, context = {}) {
     const deliveryResults = [];
     const dataDir = path.join(process.cwd(), 'data', 'deliverables');
 
+    // Normalize title once — never allow undefined/null/empty in filenames
+    const safeTitle = (content.title || job.topic || job.title || 'Untitled')
+      .replace(/[^a-zA-Z0-9_\-\s]/g, '')  // strip unsafe filename chars
+      .replace(/\s+/g, '_')               // spaces → underscores
+      .slice(0, 80)                        // cap length
+      || 'Untitled';                       // final fallback if everything was stripped
+
     // Ensure delivery directory exists
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
@@ -44,7 +51,7 @@ async function delivery(job, context = {}) {
 
     // Generate markdown version (base format)
     if (formats.includes('markdown') || formats.length === 0) {
-      const markdownFile = path.join(dataDir, `${jobId}_${content.title?.replace(/\s+/g, '_')}.md`);
+      const markdownFile = path.join(dataDir, `${jobId}_${safeTitle}.md`);
 
       const markdownContent = `# ${content.title || 'Untitled'}\n\n${content.body || ''}\n\n---\nDelivered: ${new Date().toISOString()}`;
 
@@ -67,7 +74,7 @@ async function delivery(job, context = {}) {
         const driveService = serviceFactory.getService('drive');
 
         const googleDocResult = await driveService.createDocument({
-          title: `${content.title || 'Untitled'} - ${new Date().toLocaleDateString()}`,
+          title: `${safeTitle.replace(/_/g, ' ')} - ${new Date().toLocaleDateString()}`,
           content: content.body || '',
           mimeType: 'application/vnd.google-apps.document'
         });
@@ -153,7 +160,7 @@ async function delivery(job, context = {}) {
       agent: 'delivery',
       jobId,
       action: 'content_delivered',
-      contentTitle: content.title,
+      contentTitle: content.title || 'Untitled',
       formats: formats.join(', '),
       fileCount: deliveryResults.length,
       status: 'completed'

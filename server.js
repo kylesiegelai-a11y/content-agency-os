@@ -288,7 +288,12 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Job created successfully'
+      message: 'Job created successfully',
+      job: {
+        id: result.id,
+        workflowState: result.state || 'DISCOVERED',
+        createdAt: result.createdAt || null
+      }
     });
   } catch (error) {
     console.error('[API] POST /api/jobs error:', error.message);

@@ -554,7 +554,10 @@ class Orchestrator {
     logger.info('Test job accepted', { jobId: id, type, priority, event: 'test_job_accepted' });
 
     // Route to first agent
-    return this.routeJob(job);
+    await this.routeJob(job);
+
+    // Return the created job so callers can extract id/state/createdAt
+    return job;
   }
 
   /**
