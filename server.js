@@ -49,7 +49,18 @@ const appState = {
 const app = express();
 
 // Middleware setup
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "https:", "data:"],
+    }
+  }
+}));
 app.use(morgan('combined'));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -307,10 +318,18 @@ app.get('/api/auth/google/callback', async (req, res) => {
   try {
     const gmailService = require('./utils/serviceFactory').getService('gmail');
     const tokens = await gmailService.handleAuthCallback(code);
+
+    // Log token availability for the admin but do NOT return it in the HTTP response
+    // to avoid leaking credentials via browser history, proxies, or logs
+    if (tokens.refresh_token) {
+      console.log('[OAuth] Refresh token obtained. Add it to your .env as GOOGLE_REFRESH_TOKEN.');
+      console.log('[OAuth] GOOGLE_REFRESH_TOKEN=' + tokens.refresh_token);
+    }
+
     res.json({
-      message: 'Google OAuth setup complete! Add GOOGLE_REFRESH_TOKEN to your .env file.',
-      refresh_token: tokens.refresh_token,
-      note: 'Store this refresh token securely — it will not be shown again.'
+      message: 'Google OAuth setup complete!',
+      hasRefreshToken: !!tokens.refresh_token,
+      note: 'Check the server console/logs for the refresh token. Add it to your .env file.'
     });
   } catch (error) {
     console.error('[API] OAuth callback failed:', error.message);
@@ -328,7 +347,12 @@ app.get('/api/auth/google/callback', async (req, res) => {
  */
 app.get('/api/jobs', authenticateToken, async (req, res) => {
   try {
-    const { state, status, limit = 50, sort = 'recent' } = req.query;
+    const { state, status, sort = 'recent' } = req.query;
+
+    // Validate and clamp query params
+    const ALLOWED_SORTS = ['recent', 'oldest'];
+    const safeSort = ALLOWED_SORTS.includes(sort) ? sort : 'recent';
+    const parsedLimit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
 
     // Use jobs.json as the canonical job store (written by orchestrator._persistJob)
     const { readData } = require('./utils/storage');
@@ -356,11 +380,10 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     jobs.sort((a, b) => {
       const timeA = new Date(a.lastTransition?.timestamp || a.createdAt || 0).getTime();
       const timeB = new Date(b.lastTransition?.timestamp || b.createdAt || 0).getTime();
-      return sort === 'oldest' ? timeA - timeB : timeB - timeA;
+      return safeSort === 'oldest' ? timeA - timeB : timeB - timeA;
     });
 
-    // Apply limit
-    const parsedLimit = parseInt(limit, 10);
+    // Apply validated limit
     const totalBeforeLimit = jobs.length;
     jobs = jobs.slice(0, parsedLimit);
 

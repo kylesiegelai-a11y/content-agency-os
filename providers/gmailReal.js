@@ -25,7 +25,8 @@ class GmailRealProvider {
       );
     }
 
-    this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'http://localhost:3001/api/auth/google/callback');
+    const redirectUri = options.redirectUri || process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3001/api/auth/google/callback';
+    this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     if (refreshToken) {
       this.oauth2Client.setCredentials({ refresh_token: refreshToken });

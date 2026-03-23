@@ -153,10 +153,12 @@ class CalendlyRealProvider {
       };
     } catch (error) {
       logger.warn(`[CalendlyReal] Availability endpoint failed: ${error.message}`);
-      // Fallback: return empty
+      // Return empty but include error flag so callers can distinguish "no slots" from "API failure"
       return {
         collection: [],
-        pagination: { count: 0, next_page_uri: null, previous_page_uri: null }
+        pagination: { count: 0, next_page_uri: null, previous_page_uri: null },
+        _error: true,
+        _errorMessage: error.message
       };
     }
   }

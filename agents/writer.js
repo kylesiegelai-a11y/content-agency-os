@@ -80,7 +80,8 @@ Requirements:
 
     // Extract content and estimate word count
     const content = result.content;
-    const estimatedWords = content.split(/\s+/).length;
+    // Filter empty strings from split to avoid overcounting on multiple spaces/newlines
+    const estimatedWords = content.split(/\s+/).filter(w => w.length > 0).length;
 
     // Prepare output
     const contentData = {

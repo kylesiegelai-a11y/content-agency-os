@@ -58,7 +58,19 @@ function persist() {
   if (!db) return;
   const data = db.export();
   const buffer = Buffer.from(data);
-  fs.writeFileSync(DB_PATH, buffer);
+
+  // Atomic write: write to temp file, then rename over the original.
+  // If interrupted, the original file remains intact.
+  const tmpPath = DB_PATH + '.tmp';
+  try {
+    fs.writeFileSync(tmpPath, buffer);
+    fs.renameSync(tmpPath, DB_PATH);
+  } catch (err) {
+    // Clean up temp file on failure
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    logger.error('[Database] persist() failed', { error: err.message });
+    throw err;
+  }
 }
 
 // ── Schema ──────────────────────────────────────────────────────────

@@ -73,6 +73,12 @@ function extractDomain(email) {
   return parts.length > 1 ? parts[1].toLowerCase() : 'unknown';
 }
 
+/** Basic email format validation */
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isValidEmail(email) {
+  return typeof email === 'string' && EMAIL_REGEX.test(email.trim());
+}
+
 function todayKey() {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 }
@@ -243,6 +249,7 @@ async function addToSuppressionList(email, reason = 'manual', source = 'user') {
   const normalizedEmail = (email || '').toLowerCase().trim();
 
   if (!normalizedEmail) return { added: false, reason: 'Empty email' };
+  if (!isValidEmail(normalizedEmail)) return { added: false, reason: 'Invalid email format' };
 
   // Check for duplicate
   const exists = data.suppression.emails.some(entry => entry.email === normalizedEmail);
@@ -384,6 +391,11 @@ function detectOptOut(messageBody) {
  * Process an inbound reply — auto-detect opt-out and suppress if found.
  */
 async function processInboundReply(senderEmail, messageBody) {
+  if (!isValidEmail(senderEmail)) {
+    logger.warn('[compliance] processInboundReply called with invalid email', { email: senderEmail });
+    return { optOutDetected: false, error: 'Invalid sender email format' };
+  }
+
   const detection = detectOptOut(messageBody);
 
   if (detection.isOptOut) {

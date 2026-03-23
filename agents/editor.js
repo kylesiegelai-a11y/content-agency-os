@@ -109,22 +109,26 @@ Please provide a comprehensive review covering:
       }
     );
 
+    // Validate response schema — default missing scores to 0 instead of undefined/NaN
+    const rc = result.content || {};
+    const safeScore = (val) => (typeof val === 'number' && isFinite(val)) ? val : 0;
+
     // Prepare review data
     const reviewData = {
       id: jobId,
       contentJobId: job.jobId,
       createdAt: new Date().toISOString(),
-      review: result.content,
+      review: rc,
       scores: {
-        clarity: result.content.clarity,
-        grammar: result.content.grammar,
-        toneConsistency: result.content.toneConsistency,
-        seoScore: result.content.seoScore,
-        audienceAlignment: result.content.audienceAlignment,
-        overall: result.content.overallScore
+        clarity: safeScore(rc.clarity),
+        grammar: safeScore(rc.grammar),
+        toneConsistency: safeScore(rc.toneConsistency),
+        seoScore: safeScore(rc.seoScore),
+        audienceAlignment: safeScore(rc.audienceAlignment),
+        overall: safeScore(rc.overallScore)
       },
-      issueCount: result.content.issues ? result.content.issues.length : 0,
-      criticalIssues: result.content.issues ? result.content.issues.filter(i => i.severity === 'critical').length : 0,
+      issueCount: Array.isArray(rc.issues) ? rc.issues.length : 0,
+      criticalIssues: Array.isArray(rc.issues) ? rc.issues.filter(i => i.severity === 'critical').length : 0,
       usage: result.usage
     };
 
@@ -132,7 +136,7 @@ Please provide a comprehensive review covering:
     promptManager.trackJobPromptVersion(jobId, 'editor', prompt.version);
 
     // Determine if content needs revision
-    const needsRevision = result.content.overallScore < 75;
+    const needsRevision = reviewData.scores.overall < 75;
 
     // Log activity
     await appendToArray('activity.json', {
@@ -141,12 +145,12 @@ Please provide a comprehensive review covering:
       jobId,
       action: 'review_completed',
       contentJobId: job.jobId,
-      overallScore: result.content.overallScore,
+      overallScore: reviewData.scores.overall,
       needsRevision,
       status: 'completed'
     });
 
-    logger.info(`[editor] Review completed for job ${jobId}: score ${result.content.overallScore}/100`);
+    logger.info(`[editor] Review completed for job ${jobId}: score ${reviewData.scores.overall}/100`);
 
     return reviewData;
   } catch (error) {

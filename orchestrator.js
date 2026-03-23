@@ -129,7 +129,15 @@ class Orchestrator {
   async processJob(jobRecord) {
     const job = jobRecord.data || jobRecord;
     const agentName = AGENT_ROUTES[job.state];
-    if (!agentName) throw new Error(`No agent route for state ${job.state}`);
+    if (!agentName) {
+      // Check if this is a known terminal state (DELIVERED, CLOSED, DEAD_LETTER) — not an error
+      const terminalStates = [JOB_STATES.DELIVERED, JOB_STATES.CLOSED, JOB_STATES.DEAD_LETTER];
+      if (terminalStates.includes(job.state)) {
+        logger.info('Job is in terminal state, no agent to run', { jobId: job.id, state: job.state });
+        return { terminal: true, state: job.state };
+      }
+      throw new Error(`No agent route for state ${job.state}`);
+    }
 
     const agent = await this.loadAgent(agentName);
     if (!agent) throw new Error(`Agent ${agentName} not available`);
@@ -491,9 +499,9 @@ class Orchestrator {
     job.failureTime = new Date();
     job.originalState = state;
 
-    this.deadLetterQueue.unshift(job);
+    this.deadLetterQueue.push(job);
     if (this.deadLetterQueue.length > this.deadLetterQueueSize) {
-      this.deadLetterQueue.pop();
+      this.deadLetterQueue.shift(); // Evict oldest (FIFO) so newest failures are retained
     }
 
     this._logActivity('JOB_DEAD_LETTER', {
