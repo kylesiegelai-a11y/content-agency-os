@@ -29,7 +29,38 @@ class CalendlyRealProvider {
     this._userUri = null;
     this._orgUri = null;
     this.bookings = new Map();
-    this.options = options;
+    this._maxBookingsCache = 1000;
+
+    // Store only non-sensitive options (strip API token)
+    const { apiToken: _at, ...safeOptions } = options;
+    this._safeOptions = safeOptions;
+  }
+
+  /**
+   * Prevent credentials from leaking into logs/serialization
+   */
+  toJSON() {
+    return {
+      type: 'CalendlyRealProvider',
+      bookingsCached: this.bookings.size,
+      authenticated: !!this.apiToken
+    };
+  }
+
+  /**
+   * Evict oldest booking entries when cache exceeds max size
+   * Uses insertion order (Map iteration order) as a proxy for age
+   */
+  _evictOldBookings() {
+    if (this.bookings.size <= this._maxBookingsCache) return;
+
+    const excess = this.bookings.size - this._maxBookingsCache;
+    const keysIter = this.bookings.keys();
+    for (let i = 0; i < excess; i++) {
+      const oldest = keysIter.next().value;
+      this.bookings.delete(oldest);
+    }
+    logger.info(`[CalendlyReal] Evicted ${excess} stale booking cache entries`);
   }
 
   /**
@@ -228,6 +259,7 @@ class CalendlyRealProvider {
     };
 
     this.bookings.set(bookingId, bookingData);
+    this._evictOldBookings();
     logger.info(`[CalendlyReal] Created scheduling link for ${email}: ${linkData.resource?.booking_url}`);
 
     return { resource: bookingData };

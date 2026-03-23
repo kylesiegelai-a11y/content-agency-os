@@ -33,7 +33,49 @@ class GmailRealProvider {
 
     this.gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
     this.watchCallbacks = [];
-    this.options = options;
+
+    // Store only non-sensitive options (strip credentials)
+    const { clientId: _cid, clientSecret: _cs, refreshToken: _rt, ...safeOptions } = options;
+    this._safeOptions = safeOptions;
+  }
+
+  /**
+   * Ensure OAuth credentials are fresh; refresh if expired
+   * Wraps API calls so 401s trigger a single token refresh + retry
+   * @param {Function} fn - Async function to execute
+   * @returns {Promise} Result of fn()
+   */
+  async _ensureAuth(fn) {
+    try {
+      return await fn();
+    } catch (error) {
+      // Detect expired/invalid token errors
+      const status = error?.response?.status || error?.code;
+      if (status === 401 || status === 'UNAUTHENTICATED') {
+        logger.info('[GmailReal] Token expired, attempting refresh...');
+        try {
+          const { credentials } = await this.oauth2Client.refreshAccessToken();
+          this.oauth2Client.setCredentials(credentials);
+          logger.info('[GmailReal] Token refreshed successfully');
+          return await fn();
+        } catch (refreshError) {
+          logger.error(`[GmailReal] Token refresh failed: ${refreshError.message}`);
+          throw refreshError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Prevent credentials from leaking into logs/serialization
+   */
+  toJSON() {
+    return {
+      type: 'GmailRealProvider',
+      authenticated: this.isAuthenticated(),
+      watchCallbackCount: this.watchCallbacks.length
+    };
   }
 
   /**
@@ -102,10 +144,12 @@ class GmailRealProvider {
     try {
       const raw = this._buildRawEmail(message);
 
-      const response = await this.gmail.users.messages.send({
-        userId: 'me',
-        requestBody: { raw }
-      });
+      const response = await this._ensureAuth(() =>
+        this.gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw }
+        })
+      );
 
       logger.info(`[GmailReal] Sent email to ${message.to}: ${response.data.id}`);
 
@@ -131,22 +175,26 @@ class GmailRealProvider {
     const { query = '', maxResults = 10 } = options;
 
     try {
-      const listResponse = await this.gmail.users.messages.list({
-        userId: 'me',
-        q: query,
-        maxResults
-      });
+      const listResponse = await this._ensureAuth(() =>
+        this.gmail.users.messages.list({
+          userId: 'me',
+          q: query,
+          maxResults
+        })
+      );
 
       const messageIds = listResponse.data.messages || [];
       const messages = [];
 
       for (const { id } of messageIds) {
         try {
-          const msg = await this.gmail.users.messages.get({
-            userId: 'me',
-            id,
-            format: 'full'
-          });
+          const msg = await this._ensureAuth(() =>
+            this.gmail.users.messages.get({
+              userId: 'me',
+              id,
+              format: 'full'
+            })
+          );
           messages.push(msg.data);
         } catch (err) {
           logger.warn(`[GmailReal] Failed to fetch message ${id}: ${err.message}`);
@@ -167,11 +215,13 @@ class GmailRealProvider {
    */
   async getMessage(messageId) {
     try {
-      const response = await this.gmail.users.messages.get({
-        userId: 'me',
-        id: messageId,
-        format: 'full'
-      });
+      const response = await this._ensureAuth(() =>
+        this.gmail.users.messages.get({
+          userId: 'me',
+          id: messageId,
+          format: 'full'
+        })
+      );
       return response.data;
     } catch (error) {
       logger.error(`[GmailReal] Failed to get message ${messageId}: ${error.message}`);
@@ -224,13 +274,15 @@ class GmailRealProvider {
    */
   async markAsRead(messageId) {
     try {
-      const response = await this.gmail.users.messages.modify({
-        userId: 'me',
-        id: messageId,
-        requestBody: {
-          removeLabelIds: ['UNREAD']
-        }
-      });
+      const response = await this._ensureAuth(() =>
+        this.gmail.users.messages.modify({
+          userId: 'me',
+          id: messageId,
+          requestBody: {
+            removeLabelIds: ['UNREAD']
+          }
+        })
+      );
       return {
         id: response.data.id,
         labelIds: response.data.labelIds
@@ -248,10 +300,12 @@ class GmailRealProvider {
    */
   async deleteMessage(messageId) {
     try {
-      await this.gmail.users.messages.trash({
-        userId: 'me',
-        id: messageId
-      });
+      await this._ensureAuth(() =>
+        this.gmail.users.messages.trash({
+          userId: 'me',
+          id: messageId
+        })
+      );
       logger.info(`[GmailReal] Trashed message ${messageId}`);
     } catch (error) {
       logger.error(`[GmailReal] Failed to delete message ${messageId}: ${error.message}`);

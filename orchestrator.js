@@ -155,6 +155,12 @@ class Orchestrator {
       return { error: true, message: validationError };
     }
 
+    // Clear stale error state on successful processing (important for retries)
+    if (job.lastError) {
+      job.lastError = null;
+      job.lastErrorTime = null;
+    }
+
     // Store agent result on the job for downstream agents
     if (!job.agentResults) job.agentResults = {};
     job.agentResults[agentName] = result;
@@ -162,23 +168,11 @@ class Orchestrator {
     // Propagate key output fields so downstream agents can read them from job.*
     this._propagateAgentOutput(job, agentName, result);
 
-    // Determine next state — DELIVERED is the terminal state for the content pipeline
-    const NEXT_STATE = {
-      DISCOVERED: JOB_STATES.SCORED,
-      SCORED: JOB_STATES.APPROVED,
-      APPROVED: JOB_STATES.BRIEFED,
-      BRIEFED: JOB_STATES.WRITING,
-      WRITING: JOB_STATES.EDITING,
-      EDITING: JOB_STATES.HUMANIZING,
-      HUMANIZING: JOB_STATES.QUALITY_CHECK,
-      QUALITY_CHECK: JOB_STATES.APPROVED_CONTENT,
-      APPROVED_CONTENT: JOB_STATES.DELIVERING,
-      DELIVERING: JOB_STATES.DELIVERED
-    };
-
-    const nextState = NEXT_STATE[job.state];
+    // Determine next state from STATE_TRANSITIONS (first non-FAILED target is the happy path)
+    const validTransitions = STATE_TRANSITIONS[job.state] || [];
+    const nextState = validTransitions.find(s => s !== JOB_STATES.FAILED);
     if (!nextState) {
-      // Terminal state reached
+      // Terminal state reached (DELIVERED, DEAD_LETTER, etc.)
       job.completedAt = new Date();
       job.completionStatus = 'success';
       this._persistJob(job);
@@ -281,12 +275,17 @@ class Orchestrator {
     }
 
     // Before delivery, ensure job.content is the { title, body } shape delivery expects
+    // Guard: only wrap if content is a plain string (skip if already an object to prevent re-wrapping on retry)
     if (job.state === JOB_STATES.APPROVED_CONTENT || job.state === JOB_STATES.DELIVERING) {
       if (typeof job.content === 'string') {
         job.content = {
           title: job.topic || job.title || 'Untitled',
           body: job.content
         };
+      } else if (job.content && typeof job.content === 'object' && !job.content.body) {
+        // Object exists but missing body — treat as malformed, log and wrap safely
+        logger.warn('Content object missing body field', { jobId: job.id });
+        job.content = { title: job.topic || job.title || 'Untitled', body: JSON.stringify(job.content) };
       }
     }
   }

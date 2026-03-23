@@ -105,10 +105,12 @@ class Scheduler extends EventEmitter {
         lastError: null
       };
 
+      // Always schedule the cron job — kill switch is checked at execution time
+      // in _executeTask() via _shouldRunTask(), allowing dynamic toggling at runtime
       const cronJob = cron.schedule(cronExpression, async () => {
         await this._executeTask(task);
       }, {
-        scheduled: !this._isGlobalKillSwitchEnabled(),
+        scheduled: true,
         runOnInit: false
       });
 

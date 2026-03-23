@@ -31,7 +31,47 @@ class DriveRealProvider {
 
     this.drive = google.drive({ version: 'v3', auth: this.oauth2Client });
     this.files = new Map();
-    this.options = options;
+
+    // Store only non-sensitive options (strip credentials)
+    const { clientId: _cid, clientSecret: _cs, refreshToken: _rt, ...safeOptions } = options;
+    this._safeOptions = safeOptions;
+  }
+
+  /**
+   * Ensure OAuth credentials are fresh; refresh if expired
+   * Wraps API calls so 401s trigger a single token refresh + retry
+   * @param {Function} fn - Async function to execute
+   * @returns {Promise} Result of fn()
+   */
+  async _ensureAuth(fn) {
+    try {
+      return await fn();
+    } catch (error) {
+      const status = error?.response?.status || error?.code;
+      if (status === 401 || status === 'UNAUTHENTICATED') {
+        logger.info('[DriveReal] Token expired, attempting refresh...');
+        try {
+          const { credentials } = await this.oauth2Client.refreshAccessToken();
+          this.oauth2Client.setCredentials(credentials);
+          logger.info('[DriveReal] Token refreshed successfully');
+          return await fn();
+        } catch (refreshError) {
+          logger.error(`[DriveReal] Token refresh failed: ${refreshError.message}`);
+          throw refreshError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Prevent credentials from leaking into logs/serialization
+   */
+  toJSON() {
+    return {
+      type: 'DriveRealProvider',
+      filesCached: this.files.size
+    };
   }
 
   /**
@@ -55,14 +95,16 @@ class DriveRealProvider {
       contentStream.push(document.content || '');
       contentStream.push(null);
 
-      const response = await this.drive.files.create({
-        requestBody: fileMetadata,
-        media: {
-          mimeType: 'text/plain',
-          body: contentStream
-        },
-        fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
-      });
+      const response = await this._ensureAuth(() =>
+        this.drive.files.create({
+          requestBody: fileMetadata,
+          media: {
+            mimeType: 'text/plain',
+            body: contentStream
+          },
+          fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
+        })
+      );
 
       const file = response.data;
 
@@ -98,14 +140,16 @@ class DriveRealProvider {
       contentStream.push(content);
       contentStream.push(null);
 
-      const response = await this.drive.files.update({
-        fileId,
-        media: {
-          mimeType: 'text/plain',
-          body: contentStream
-        },
-        fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
-      });
+      const response = await this._ensureAuth(() =>
+        this.drive.files.update({
+          fileId,
+          media: {
+            mimeType: 'text/plain',
+            body: contentStream
+          },
+          fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
+        })
+      );
 
       const file = response.data;
       logger.info(`[DriveReal] Updated document ${fileId}`);
@@ -144,17 +188,19 @@ class DriveRealProvider {
       contentStream.push(content);
       contentStream.push(null);
 
-      const response = await this.drive.files.create({
-        requestBody: {
-          name,
-          mimeType
-        },
-        media: {
-          mimeType,
-          body: contentStream
-        },
-        fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
-      });
+      const response = await this._ensureAuth(() =>
+        this.drive.files.create({
+          requestBody: {
+            name,
+            mimeType
+          },
+          media: {
+            mimeType,
+            body: contentStream
+          },
+          fields: 'id, name, webViewLink, createdTime, modifiedTime, size, mimeType'
+        })
+      );
 
       const file = response.data;
       logger.info(`[DriveReal] Uploaded file "${name}": ${file.id}`);
@@ -195,10 +241,14 @@ class DriveRealProvider {
       };
 
       if (query) {
-        params.q = `name contains '${query}'`;
+        // Escape single quotes to prevent Drive API query injection
+        const sanitizedQuery = query.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        params.q = `name contains '${sanitizedQuery}'`;
       }
 
-      const response = await this.drive.files.list(params);
+      const response = await this._ensureAuth(() =>
+        this.drive.files.list(params)
+      );
 
       return {
         kind: 'drive#fileList',
@@ -218,10 +268,12 @@ class DriveRealProvider {
    */
   async getFile(fileId) {
     try {
-      const response = await this.drive.files.get({
-        fileId,
-        fields: 'id, name, mimeType, webViewLink, createdTime, modifiedTime, size, shared, permissions'
-      });
+      const response = await this._ensureAuth(() =>
+        this.drive.files.get({
+          fileId,
+          fields: 'id, name, mimeType, webViewLink, createdTime, modifiedTime, size, shared, permissions'
+        })
+      );
       return response.data;
     } catch (error) {
       logger.error(`[DriveReal] Failed to get file ${fileId}: ${error.message}`);
@@ -241,14 +293,14 @@ class DriveRealProvider {
       const permissions = [];
 
       for (const email of users) {
-        const response = await this.drive.permissions.create({
+        const response = await this._ensureAuth(() => this.drive.permissions.create({
           fileId,
           requestBody: {
             type: 'user',
             role,
             emailAddress: email
           }
-        });
+        }));
         permissions.push(response.data);
       }
 
@@ -271,7 +323,7 @@ class DriveRealProvider {
    */
   async deleteFile(fileId) {
     try {
-      await this.drive.files.delete({ fileId });
+      await this._ensureAuth(() => this.drive.files.delete({ fileId }));
       logger.info(`[DriveReal] Deleted file ${fileId}`);
     } catch (error) {
       logger.error(`[DriveReal] Failed to delete file ${fileId}: ${error.message}`);
@@ -286,18 +338,22 @@ class DriveRealProvider {
    */
   async getFileContent(fileId) {
     try {
-      const response = await this.drive.files.export({
-        fileId,
-        mimeType: 'text/plain'
-      });
+      const response = await this._ensureAuth(() =>
+        this.drive.files.export({
+          fileId,
+          mimeType: 'text/plain'
+        })
+      );
       return response.data;
     } catch (error) {
       // Fallback: try downloading as binary
       try {
-        const response = await this.drive.files.get({
-          fileId,
-          alt: 'media'
-        });
+        const response = await this._ensureAuth(() =>
+          this.drive.files.get({
+            fileId,
+            alt: 'media'
+          })
+        );
         return response.data;
       } catch (fallbackError) {
         logger.error(`[DriveReal] Failed to get file content ${fileId}: ${fallbackError.message}`);

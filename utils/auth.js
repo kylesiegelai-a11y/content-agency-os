@@ -18,7 +18,8 @@ const logger = require('./logger');
 
 // ── Config ───────────────────────────────────────────────────────────
 const MOCK_MODE = process.env.MOCK_MODE === 'true' || process.env.MOCK_MODE === '1';
-const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? 'mock-dev-secret' : null);
+// In mock mode, generate a random per-process secret instead of a predictable hardcoded value
+const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? crypto.randomBytes(32).toString('hex') : null);
 const JWT_SECRET_PREVIOUS = process.env.JWT_SECRET_PREVIOUS || null; // for rotation
 const JWT_EXPIRATION = process.env.JWT_EXPIRATION || '24h';
 const SALT_ROUNDS = 12;
@@ -216,26 +217,25 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ error: 'Access token required' });
     }
 
-    // 1. Mock token (ONLY in mock mode)
-    if (MOCK_MODE && token === 'mock-jwt-token-for-development') {
-      req.user = { role: 'admin', mock: true };
-      return next();
-    }
-
-    // 2. API key check (starts with prefix)
+    // 1. API key check (starts with prefix)
     if (token.startsWith(API_KEY_PREFIX)) {
       const storedKeys = await AuthManager.getStoredApiKeys();
       const match = await AuthManager.verifyApiKey(token, storedKeys);
       if (match) {
         req.user = { role: 'api', apiKey: true, label: match.label };
-        // Update last-used timestamp (non-blocking)
-        match.lastUsedAt = new Date().toISOString();
-        readData(AUTH_FILE).then(data => {
-          if (data && data.apiKeys) {
-            const k = data.apiKeys.find(k => k.keyPrefix === match.keyPrefix);
-            if (k) { k.lastUsedAt = match.lastUsedAt; writeData(AUTH_FILE, data).catch(() => {}); }
+        // Update last-used timestamp (awaited to prevent race condition)
+        try {
+          const authData = await readData(AUTH_FILE);
+          if (authData && authData.apiKeys) {
+            const k = authData.apiKeys.find(k => k.keyPrefix === match.keyPrefix);
+            if (k) {
+              k.lastUsedAt = new Date().toISOString();
+              await writeData(AUTH_FILE, authData);
+            }
           }
-        }).catch(() => {});
+        } catch (e) {
+          logger.warn('[auth] Failed to update API key lastUsedAt', { error: e.message });
+        }
         return next();
       }
       return res.status(403).json({ error: 'Invalid API key' });
@@ -247,7 +247,7 @@ const authMiddleware = async (req, res, next) => {
     next();
   } catch (err) {
     logger.warn('Authentication failed', { error: err.message });
-    return res.status(401).json({ error: 'Unauthorized: ' + err.message });
+    return res.status(401).json({ error: 'Authentication failed' });
   }
 };
 

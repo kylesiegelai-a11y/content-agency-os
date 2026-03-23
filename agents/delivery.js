@@ -25,7 +25,10 @@ const logger = require('../utils/logger');
  * @returns {Promise<Object>} Delivery record with file locations
  */
 async function delivery(job, context = {}) {
-  const jobId = job.jobId || job.id || `delivery_${Date.now()}`;
+  const jobId = job.jobId || job.id;
+  if (!jobId || typeof jobId !== 'string') {
+    throw new Error('Delivery requires a valid jobId');
+  }
 
   try {
     logger.info(`[delivery] Preparing content delivery for job ${jobId}`);
@@ -33,9 +36,11 @@ async function delivery(job, context = {}) {
     const content = job.content || {};
 
     // Resolve formats: job-level → client-level → default
-    const formats = job.deliveryFormats
-      || job.client?.deliveryFormats
-      || ['markdown'];
+    const SUPPORTED_FORMATS = ['markdown', 'pdf', 'html', 'google_docs'];
+    let formats = job.deliveryFormats || job.client?.deliveryFormats || ['markdown'];
+    if (!Array.isArray(formats)) formats = ['markdown'];
+    formats = formats.filter(f => SUPPORTED_FORMATS.includes(f));
+    if (formats.length === 0) formats = ['markdown'];
 
     // ── Generate all deliverables ────────────────────────
     const deliveryResults = await generateDeliverables(job, content, { formats });

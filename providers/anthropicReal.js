@@ -17,7 +17,20 @@ class AnthropicRealProvider {
 
     this.client = new Anthropic({ apiKey });
     this.messageCount = 0;
-    this.options = options;
+
+    // Store only non-sensitive options (strip API key)
+    const { apiKey: _ak, ...safeOptions } = options;
+    this._safeOptions = safeOptions;
+  }
+
+  /**
+   * Prevent credentials from leaking into logs/serialization
+   */
+  toJSON() {
+    return {
+      type: 'AnthropicRealProvider',
+      messageCount: this.messageCount
+    };
   }
 
   /**

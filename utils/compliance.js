@@ -12,6 +12,30 @@
 const { readData, writeData, appendToArray } = require('./storage');
 const logger = require('./logger');
 
+// ── Mutex for serializing rate-limit read-check-write cycles ─────────
+
+let _rateLimitLock = Promise.resolve();
+
+/**
+ * Acquire a simple async mutex so concurrent sends don't race
+ * on the load → check → write cycle.
+ * @param {Function} fn - Critical section (async)
+ * @returns {Promise} Result of fn()
+ */
+function withRateLimitLock(fn) {
+  let release;
+  const next = new Promise(resolve => { release = resolve; });
+  const prev = _rateLimitLock;
+  _rateLimitLock = next;
+  return prev.then(async () => {
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  });
+}
+
 // ── Constants ────────────────────────────────────────────────────────
 
 const COMPLIANCE_FILE = 'compliance.json';
@@ -128,35 +152,38 @@ async function checkRateLimit(recipientEmail) {
 
 /**
  * Record that a send occurred (call AFTER successful send).
+ * Serialized via mutex to prevent concurrent writes from racing.
  */
 async function recordSend(recipientEmail) {
-  const data = await loadComplianceData();
-  const today = todayKey();
-  const domain = extractDomain(recipientEmail);
-  const now = Date.now();
+  return withRateLimitLock(async () => {
+    const data = await loadComplianceData();
+    const today = todayKey();
+    const domain = extractDomain(recipientEmail);
+    const now = Date.now();
 
-  if (!data.rateLimits[today]) {
-    data.rateLimits[today] = { total: 0, domains: {}, lastSendAt: 0 };
-  }
+    if (!data.rateLimits[today]) {
+      data.rateLimits[today] = { total: 0, domains: {}, lastSendAt: 0 };
+    }
 
-  data.rateLimits[today].total += 1;
-  data.rateLimits[today].domains[domain] = (data.rateLimits[today].domains[domain] || 0) + 1;
-  data.rateLimits[today].lastSendAt = now;
+    data.rateLimits[today].total += 1;
+    data.rateLimits[today].domains[domain] = (data.rateLimits[today].domains[domain] || 0) + 1;
+    data.rateLimits[today].lastSendAt = now;
 
-  data.sendLog.push({
-    email: recipientEmail,
-    domain,
-    sentAt: new Date(now).toISOString()
+    data.sendLog.push({
+      email: recipientEmail,
+      domain,
+      sentAt: new Date(now).toISOString()
+    });
+
+    // Keep send log to last 1000 entries
+    if (data.sendLog.length > 1000) {
+      data.sendLog = data.sendLog.slice(-1000);
+    }
+
+    await saveComplianceData(data);
+
+    logger.info('[compliance] Send recorded', { email: recipientEmail, domain, dailyTotal: data.rateLimits[today].total });
   });
-
-  // Keep send log to last 1000 entries
-  if (data.sendLog.length > 1000) {
-    data.sendLog = data.sendLog.slice(-1000);
-  }
-
-  await saveComplianceData(data);
-
-  logger.info('[compliance] Send recorded', { email: recipientEmail, domain, dailyTotal: data.rateLimits[today].total });
 }
 
 /**
@@ -593,9 +620,10 @@ async function getComplianceSummary() {
 /**
  * Full pre-send compliance check. Call before every outbound email.
  * Returns { allowed, reason } — if not allowed, DO NOT SEND.
+ * Serialized via mutex so concurrent callers see consistent rate-limit state.
  */
 async function preSendCheck(recipientEmail) {
-  // 1. Suppression check
+  // 1. Suppression check (read-only, safe outside mutex)
   const suppression = await isSuppressed(recipientEmail);
   if (suppression.suppressed) {
     const match = suppression.emailMatch ? 'email' : 'domain';
@@ -606,18 +634,20 @@ async function preSendCheck(recipientEmail) {
     };
   }
 
-  // 2. Rate limit check
-  const rateLimit = await checkRateLimit(recipientEmail);
-  if (!rateLimit.allowed) {
-    return {
-      allowed: false,
-      reason: rateLimit.reason,
-      retryAfterMs: rateLimit.retryAfterMs,
-      check: 'rate_limit'
-    };
-  }
+  // 2. Rate limit check (serialized to avoid TOCTOU race)
+  return withRateLimitLock(async () => {
+    const rateLimit = await checkRateLimit(recipientEmail);
+    if (!rateLimit.allowed) {
+      return {
+        allowed: false,
+        reason: rateLimit.reason,
+        retryAfterMs: rateLimit.retryAfterMs,
+        check: 'rate_limit'
+      };
+    }
 
-  return { allowed: true };
+    return { allowed: true };
+  });
 }
 
 module.exports = {

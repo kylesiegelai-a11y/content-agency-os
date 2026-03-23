@@ -109,8 +109,17 @@ Format your response as structured JSON.`;
       }
     );
 
-    // Extract assessment data
+    // Extract assessment data with validation
     const assessment = result.content;
+    if (!assessment || typeof assessment.overallScore !== 'number' || !isFinite(assessment.overallScore)) {
+      logger.error('Quality gate received invalid score', { jobId, score: assessment?.overallScore });
+      return {
+        passed: false,
+        overallScore: 0,
+        error: 'Quality gate assessment returned invalid or missing score',
+        assessment
+      };
+    }
     const passed = assessment.overallScore >= threshold;
 
     // Prepare quality gate data

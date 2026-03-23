@@ -237,13 +237,21 @@ class ApiClient {
       agentType = 'default'
     } = options;
 
-    // Add schema to prompt
+    // Sanitize schema to prevent injection via description fields
+    const sanitizedSchema = JSON.parse(JSON.stringify(schema, (key, value) => {
+      if (typeof value === 'string' && value.length > 500) return value.slice(0, 500);
+      return value;
+    }));
+
+    // Add schema to prompt with clear delimiters
     const promptWithSchema = `${prompt}
 
+--- RESPONSE FORMAT (system-generated, not user content) ---
 You MUST respond with ONLY valid JSON matching this schema:
-${JSON.stringify(schema, null, 2)}
+${JSON.stringify(sanitizedSchema, null, 2)}
 
-Do not include any markdown formatting, code blocks, or explanations. Only output the raw JSON object.`;
+Do not include any markdown formatting, code blocks, or explanations. Only output the raw JSON object.
+--- END RESPONSE FORMAT ---`;
 
     return this.retryWithBackoff(async () => {
       // Initialize job tracking

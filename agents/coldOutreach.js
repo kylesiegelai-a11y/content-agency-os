@@ -28,7 +28,10 @@ const logger = require('../utils/logger');
  * @returns {Promise<Object>} Outreach record
  */
 async function coldOutreach(job, context = {}) {
-  const jobId = job.jobId || `outreach_${Date.now()}`;
+  const jobId = job.jobId || job.id;
+  if (!jobId || typeof jobId !== 'string') {
+    throw new Error('Cold outreach requires a valid jobId');
+  }
 
   try {
     logger.info(`[coldOutreach] Generating cold outreach for job ${jobId}`);

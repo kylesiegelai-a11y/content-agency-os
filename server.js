@@ -26,7 +26,8 @@ const PORT = process.env.PORT || 3001;
 //   MOCK_MODE  → mock-dev-secret + mock admin token bypass
 //   PRODUCTION → JWT_SECRET required, no mock bypass, API key support
 const { AuthManager, authMiddleware: hardenedAuthMiddleware } = require('./utils/auth');
-const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? 'mock-dev-secret' : null);
+const crypto = require('crypto');
+const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? crypto.randomBytes(32).toString('hex') : null);
 
 if (!MOCK_MODE && !JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required in production mode');
@@ -50,8 +51,8 @@ const app = express();
 // Middleware setup
 app.use(helmet());
 app.use(morgan('combined'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cors({
   origin: process.env.CORS_ORIGIN?.split(',') || (MOCK_MODE ? true : false),
   credentials: true
@@ -62,14 +63,57 @@ app.use(cors({
 const authenticateToken = hardenedAuthMiddleware;
 
 // ============================================================================
+// RATE LIMITING (in-memory, per IP)
+// ============================================================================
+
+const loginAttempts = new Map();
+const LOGIN_RATE_LIMIT = { maxAttempts: 5, windowMs: 15 * 60 * 1000 }; // 5 attempts per 15 min
+
+function loginRateLimiter(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+  const record = loginAttempts.get(ip);
+
+  if (record) {
+    // Clean expired entries
+    if (now - record.firstAttempt > LOGIN_RATE_LIMIT.windowMs) {
+      loginAttempts.delete(ip);
+    } else if (record.count >= LOGIN_RATE_LIMIT.maxAttempts) {
+      const retryAfter = Math.ceil((record.firstAttempt + LOGIN_RATE_LIMIT.windowMs - now) / 1000);
+      return res.status(429).json({
+        error: 'Too many login attempts. Try again later.',
+        retryAfterSeconds: retryAfter
+      });
+    }
+  }
+
+  // Track this attempt
+  const existing = loginAttempts.get(ip);
+  if (existing && (now - existing.firstAttempt <= LOGIN_RATE_LIMIT.windowMs)) {
+    existing.count++;
+  } else {
+    loginAttempts.set(ip, { count: 1, firstAttempt: now });
+  }
+
+  // Periodic cleanup of stale entries (every 100 requests)
+  if (loginAttempts.size > 100) {
+    for (const [key, val] of loginAttempts) {
+      if (now - val.firstAttempt > LOGIN_RATE_LIMIT.windowMs) loginAttempts.delete(key);
+    }
+  }
+
+  next();
+}
+
+// ============================================================================
 // AUTH ROUTES
 // ============================================================================
 
 /**
  * POST /api/auth/login
- * Login and get JWT token
+ * Login and get JWT token (rate limited: 5 attempts per 15 min per IP)
  */
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
   const { password } = req.body;
 
   if (!password) {
@@ -84,7 +128,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (!fs.existsSync(authFilePath) && MOCK_MODE) {
       const dataDir = path.dirname(authFilePath);
       if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-      const mockHash = await bcrypt.hash('admin123', 10);
+      const mockHash = await bcrypt.hash('admin123', 12);
       fs.writeFileSync(authFilePath, JSON.stringify({ masterPassword: mockHash }, null, 2));
       console.log('[Auth] Mock mode: auto-created auth.json with default password (admin123)');
     }
@@ -182,7 +226,7 @@ app.post('/api/auth/api-keys', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Auth] API key creation error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -203,7 +247,7 @@ app.get('/api/auth/api-keys', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[Auth] API key list error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -219,7 +263,7 @@ app.delete('/api/auth/api-keys', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[Auth] API key revocation error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -245,7 +289,8 @@ app.get('/api/auth/google', (req, res) => {
     const authUrl = gmailService.getAuthUrl();
     res.redirect(authUrl);
   } catch (error) {
-    res.status(500).json({ error: `OAuth setup failed: ${error.message}` });
+    console.error('[API] OAuth setup failed:', error.message);
+    res.status(500).json({ error: 'OAuth setup failed' });
   }
 });
 
@@ -268,7 +313,8 @@ app.get('/api/auth/google/callback', async (req, res) => {
       note: 'Store this refresh token securely — it will not be shown again.'
     });
   } catch (error) {
-    res.status(500).json({ error: `OAuth callback failed: ${error.message}` });
+    console.error('[API] OAuth callback failed:', error.message);
+    res.status(500).json({ error: 'OAuth callback failed' });
   }
 });
 
@@ -346,7 +392,7 @@ app.get('/api/jobs', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/jobs error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to retrieve jobs' });
   }
 });
 
@@ -358,8 +404,29 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
   try {
     const { type, priority = 0, deadline, data = {}, deliveryFormats, client } = req.body;
 
-    if (!type) {
+    // Input validation
+    const ALLOWED_JOB_TYPES = ['content', 'outreach', 'proposal', 'research', 'strategy'];
+    const ALLOWED_DELIVERY_FORMATS = ['markdown', 'pdf', 'html', 'google_docs'];
+
+    if (!type || typeof type !== 'string') {
       return res.status(400).json({ error: 'Job type required' });
+    }
+    if (!ALLOWED_JOB_TYPES.includes(type)) {
+      return res.status(400).json({ error: `Invalid job type. Allowed: ${ALLOWED_JOB_TYPES.join(', ')}` });
+    }
+    if (typeof data !== 'object' || Array.isArray(data)) {
+      return res.status(400).json({ error: 'Job data must be a plain object' });
+    }
+    if (JSON.stringify(data).length > 50000) {
+      return res.status(400).json({ error: 'Job data too large (max 50KB)' });
+    }
+    if (deliveryFormats !== undefined) {
+      if (!Array.isArray(deliveryFormats) || !deliveryFormats.every(f => ALLOWED_DELIVERY_FORMATS.includes(f))) {
+        return res.status(400).json({ error: `Invalid delivery format. Allowed: ${ALLOWED_DELIVERY_FORMATS.join(', ')}` });
+      }
+    }
+    if (priority !== undefined && (typeof priority !== 'number' || priority < 0 || priority > 10)) {
+      return res.status(400).json({ error: 'Priority must be a number between 0 and 10' });
     }
 
     const result = await appState.orchestrator.acceptTestJob({
@@ -386,7 +453,7 @@ app.post('/api/jobs', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] POST /api/jobs error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to create job' });
   }
 });
 
@@ -437,7 +504,7 @@ app.get('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     res.json({ success: true, job: status });
   } catch (error) {
     console.error('[API] GET /api/jobs/:jobId error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to retrieve job' });
   }
 });
 
@@ -450,7 +517,12 @@ app.patch('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     const { jobId } = req.params;
     const { action, nextState, result } = req.body;
 
+    // Validate nextState against known states
+    const VALID_STATES = Object.values(JOB_STATES || {});
     if (action === 'transition' && nextState) {
+      if (typeof nextState !== 'string' || (VALID_STATES.length > 0 && !VALID_STATES.includes(nextState))) {
+        return res.status(400).json({ error: 'Invalid target state' });
+      }
       // Get job from queues
       let job = null;
       for (const queue of Object.values(appState.queues)) {
@@ -478,7 +550,7 @@ app.patch('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     console.error('[API] PATCH /api/jobs/:jobId error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Failed to update job' });
   }
 });
 
@@ -503,7 +575,7 @@ app.delete('/api/jobs/:jobId', authenticateToken, async (req, res) => {
     res.json({ success: true, message: 'Job removed successfully' });
   } catch (error) {
     console.error('[API] DELETE /api/jobs/:jobId error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -538,7 +610,7 @@ app.get('/api/approvals', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/approvals error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -580,7 +652,7 @@ app.post('/api/approvals/:jobId/approve', authenticateToken, async (req, res) =>
     res.json({ success: true, message: 'Job approved' });
   } catch (error) {
     console.error('[API] POST /api/approvals/:jobId/approve error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -612,7 +684,7 @@ app.post('/api/approvals/:jobId/reject', authenticateToken, async (req, res) => 
     res.json({ success: true, message: 'Job rejected' });
   } catch (error) {
     console.error('[API] POST /api/approvals/:jobId/reject error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -639,7 +711,7 @@ app.get('/api/metrics', authenticateToken, async (req, res) => {
     res.json({ success: true, metrics });
   } catch (error) {
     console.error('[API] GET /api/metrics error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -664,7 +736,7 @@ app.get('/api/activity', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/activity error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -697,7 +769,7 @@ app.get('/api/portfolio', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/portfolio error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -717,7 +789,7 @@ app.get('/api/clients', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/clients error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -742,7 +814,7 @@ app.get('/api/settings', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/settings error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -777,7 +849,7 @@ app.patch('/api/settings', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] PATCH /api/settings error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -802,7 +874,7 @@ app.post('/api/settings/kill-switch', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] POST /api/settings/kill-switch error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -829,7 +901,7 @@ app.patch('/api/settings/agents/:agentId', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] PATCH /api/settings/agents/:agentId error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -865,7 +937,7 @@ app.get('/api/system/status', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/system/status error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -892,7 +964,7 @@ app.get('/api/scheduler/tasks', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/scheduler/tasks error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -916,7 +988,7 @@ app.post('/api/scheduler/tasks/:taskId/pause', authenticateToken, (req, res) => 
     res.json({ success: true, message: `Task ${taskId} paused` });
   } catch (error) {
     console.error('[API] POST /api/scheduler/tasks/:taskId/pause error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -940,7 +1012,7 @@ app.post('/api/scheduler/tasks/:taskId/resume', authenticateToken, (req, res) =>
     res.json({ success: true, message: `Task ${taskId} resumed` });
   } catch (error) {
     console.error('[API] POST /api/scheduler/tasks/:taskId/resume error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -998,7 +1070,7 @@ app.post('/api/pipeline/run', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] POST /api/pipeline/run error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1019,7 +1091,7 @@ app.get('/api/pipeline/status', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/pipeline/status error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1044,7 +1116,7 @@ app.get('/api/dead-letter-queue', authenticateToken, (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/dead-letter-queue error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1065,7 +1137,7 @@ app.post('/api/dead-letter-queue/:jobId/retry', authenticateToken, async (req, r
     res.json({ success: true, message: `Job ${jobId} moved back to processing` });
   } catch (error) {
     console.error('[API] POST /api/dead-letter-queue/:jobId/retry error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1086,7 +1158,7 @@ app.get('/api/invoices', authenticateToken, async (req, res) => {
     res.json({ success: true, ...result });
   } catch (error) {
     console.error('[API] GET /api/invoices error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1101,7 +1173,7 @@ app.get('/api/invoices/summary', authenticateToken, async (req, res) => {
     res.json({ success: true, summary });
   } catch (error) {
     console.error('[API] GET /api/invoices/summary error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1118,7 +1190,7 @@ app.get('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
     res.json({ success: true, invoice });
   } catch (error) {
     console.error('[API] GET /api/invoices/:invoiceId error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1178,7 +1250,7 @@ app.post('/api/invoices', authenticateToken, async (req, res) => {
     res.status(201).json({ success: true, invoice });
   } catch (error) {
     console.error('[API] POST /api/invoices error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1194,7 +1266,7 @@ app.post('/api/invoices/:invoiceId/send', authenticateToken, async (req, res) =>
     res.json({ success: true, invoice: result });
   } catch (error) {
     console.error('[API] POST /api/invoices/:invoiceId/send error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1210,7 +1282,7 @@ app.post('/api/invoices/:invoiceId/pay', authenticateToken, async (req, res) => 
     res.json({ success: true, invoice: result });
   } catch (error) {
     console.error('[API] POST /api/invoices/:invoiceId/pay error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1227,7 +1299,7 @@ app.post('/api/invoices/:invoiceId/cancel', authenticateToken, async (req, res) 
     res.json({ success: true, invoice: result });
   } catch (error) {
     console.error('[API] POST /api/invoices/:invoiceId/cancel error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1271,7 +1343,7 @@ app.post('/api/backup', authenticateToken, async (req, res) => {
     res.json({ success: true, ...result });
   } catch (error) {
     console.error('[API] POST /api/backup error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1285,7 +1357,7 @@ app.get('/api/backups', authenticateToken, (req, res) => {
     res.json({ backups });
   } catch (error) {
     console.error('[API] GET /api/backups error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1301,7 +1373,7 @@ app.post('/api/restore', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[API] POST /api/restore error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1321,7 +1393,7 @@ app.get('/api/compliance/summary', authenticateToken, async (req, res) => {
     res.json(summary);
   } catch (error) {
     console.error('[API] GET /api/compliance/summary error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1335,7 +1407,7 @@ app.get('/api/compliance/rate-limits', authenticateToken, async (req, res) => {
     res.json(status);
   } catch (error) {
     console.error('[API] GET /api/compliance/rate-limits error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1349,7 +1421,7 @@ app.get('/api/compliance/suppression', authenticateToken, async (req, res) => {
     res.json(list);
   } catch (error) {
     console.error('[API] GET /api/compliance/suppression error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1365,7 +1437,7 @@ app.post('/api/compliance/suppression/email', authenticateToken, async (req, res
     res.json(result);
   } catch (error) {
     console.error('[API] POST /api/compliance/suppression/email error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1381,7 +1453,7 @@ app.delete('/api/compliance/suppression/email', authenticateToken, async (req, r
     res.json(result);
   } catch (error) {
     console.error('[API] DELETE /api/compliance/suppression/email error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1397,7 +1469,7 @@ app.post('/api/compliance/suppression/domain', authenticateToken, async (req, re
     res.json(result);
   } catch (error) {
     console.error('[API] POST /api/compliance/suppression/domain error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1413,7 +1485,7 @@ app.delete('/api/compliance/suppression/domain', authenticateToken, async (req, 
     res.json(result);
   } catch (error) {
     console.error('[API] DELETE /api/compliance/suppression/domain error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1429,7 +1501,7 @@ app.post('/api/compliance/check', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[API] POST /api/compliance/check error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1445,7 +1517,7 @@ app.post('/api/compliance/purge', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('[API] POST /api/compliance/purge error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1460,7 +1532,7 @@ app.get('/api/compliance/audit-log', authenticateToken, async (req, res) => {
     res.json(log);
   } catch (error) {
     console.error('[API] GET /api/compliance/audit-log error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1483,7 +1555,7 @@ app.get('/api/delivery/config', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] GET /api/delivery/config error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -1513,7 +1585,7 @@ app.post('/api/delivery/preview', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('[API] POST /api/delivery/preview error:', error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

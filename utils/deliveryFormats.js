@@ -35,8 +35,16 @@ const KAIL_BRAND = {
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function ensureDeliverableDir() {
-  if (!fs.existsSync(DELIVERABLES_DIR)) {
-    fs.mkdirSync(DELIVERABLES_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DELIVERABLES_DIR)) {
+      fs.mkdirSync(DELIVERABLES_DIR, { recursive: true });
+    }
+  } catch (err) {
+    logger.error('[deliveryFormats] Failed to create deliverables directory', {
+      path: DELIVERABLES_DIR,
+      error: err.message
+    });
+    throw new Error(`Cannot create deliverables directory: ${err.message}`);
   }
 }
 
