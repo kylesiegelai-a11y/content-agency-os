@@ -264,17 +264,32 @@ class Storage {
 // Default singleton used by agents and server at runtime
 const storage = new Storage(process.env.DATABASE_PATH || './data');
 
+// ── Storage backend routing ────────────────────────────────────────
+// Set USE_SQLITE=true to use SQLite instead of JSON files.
+// The SQLite module exposes the same API surface, so all existing code
+// works without changes.
+const USE_SQLITE = process.env.USE_SQLITE === 'true';
+
+let sqliteDb = null;
+function getSqlite() {
+  if (!sqliteDb) {
+    sqliteDb = require('./database');
+  }
+  return sqliteDb;
+}
+
 // Export model B: { Storage (class), storage (singleton), helpers }
 // Tests use: const Storage = require('./storage') — gets the class via default export
 // Agents use: const { readData, appendToArray } = require('./storage')
 // Server uses: const storage = require('./storage') — gets the singleton (also works, has .read/.write methods)
 module.exports = Storage;
 module.exports.Storage = Storage;
-module.exports.storage = storage;
-module.exports.readData = (fileName) => storage.read(fileName);
-module.exports.writeData = (fileName, data) => storage.write(fileName, data);
-module.exports.appendToArray = (fileName, item) => storage.append(fileName, item);
-module.exports.findById = (fileName, id, idField) => storage.findById(fileName, id, idField);
-module.exports.updateById = (fileName, id, updates, idField) => storage.updateById(fileName, id, updates, idField);
-module.exports.deleteById = (fileName, id, idField) => storage.deleteById(fileName, id, idField);
-module.exports.listData = (fileName, filter) => storage.list(fileName, filter);
+module.exports.storage = USE_SQLITE ? { read: (...a) => getSqlite().readData(...a), write: (...a) => getSqlite().writeData(...a), append: (...a) => getSqlite().appendToArray(...a), findById: (...a) => getSqlite().findById(...a), updateById: (...a) => getSqlite().updateById(...a), deleteById: (...a) => getSqlite().deleteById(...a), list: (...a) => getSqlite().listData(...a), initialize: (...a) => getSqlite().initialize(...a), getStats: () => getSqlite().getStats(), paginate: async () => ({ items: [], total: 0 }), backupAll: () => true, clearAll: () => {} } : storage;
+module.exports.readData = USE_SQLITE ? (...a) => getSqlite().readData(...a) : (fileName) => storage.read(fileName);
+module.exports.writeData = USE_SQLITE ? (...a) => getSqlite().writeData(...a) : (fileName, data) => storage.write(fileName, data);
+module.exports.appendToArray = USE_SQLITE ? (...a) => getSqlite().appendToArray(...a) : (fileName, item) => storage.append(fileName, item);
+module.exports.findById = USE_SQLITE ? (...a) => getSqlite().findById(...a) : (fileName, id, idField) => storage.findById(fileName, id, idField);
+module.exports.updateById = USE_SQLITE ? (...a) => getSqlite().updateById(...a) : (fileName, id, updates, idField) => storage.updateById(fileName, id, updates, idField);
+module.exports.deleteById = USE_SQLITE ? (...a) => getSqlite().deleteById(...a) : (fileName, id, idField) => storage.deleteById(fileName, id, idField);
+module.exports.listData = USE_SQLITE ? (...a) => getSqlite().listData(...a) : (fileName, filter) => storage.list(fileName, filter);
+module.exports.USE_SQLITE = USE_SQLITE;

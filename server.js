@@ -1200,9 +1200,16 @@ async function startServer() {
     console.log('╚════════════════════════════════════════════════════════╝');
     console.log('');
 
-    // Initialize required JSON data stores
-    console.log('[Server] Initializing data stores...');
-    const { storage } = require('./utils/storage');
+    // Initialize data stores (SQLite or JSON based on USE_SQLITE env var)
+    const { storage, USE_SQLITE } = require('./utils/storage');
+    if (USE_SQLITE) {
+      console.log('[Server] Initializing SQLite database...');
+      const database = require('./utils/database');
+      await database.initDatabase();
+      console.log('[Server] SQLite ready');
+    } else {
+      console.log('[Server] Initializing JSON data stores...');
+    }
     const dataStores = {
       'activity.json': { activities: [] },
       'jobs.json': { jobs: [] },
@@ -1269,6 +1276,11 @@ async function startServer() {
 
       if (appState.queues) {
         await closeQueues(appState.queues);
+      }
+
+      // Close SQLite if active
+      if (USE_SQLITE) {
+        try { require('./utils/database').closeDatabase(); } catch {}
       }
 
       process.exit(0);
