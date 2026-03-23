@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('./utils/logger');
+const { generateInvoice } = require('./utils/billing');
 
 // Explicit agent module registry — maps route names to actual file exports
 const AGENT_MODULES = {
@@ -401,6 +402,18 @@ class Orchestrator {
     if (nextState === JOB_STATES.DELIVERED || nextState === JOB_STATES.CLOSED) {
       job.completedAt = new Date();
       job.completionStatus = 'success';
+    }
+
+    // Auto-generate invoice on delivery
+    if (nextState === JOB_STATES.DELIVERED) {
+      try {
+        const invoice = await generateInvoice(job);
+        job.invoiceId = invoice.id;
+        logger.info('Auto-invoice generated on delivery', { jobId: id, invoiceId: invoice.id, event: 'auto_invoice' });
+      } catch (invoiceErr) {
+        // Non-blocking — delivery succeeds even if invoicing fails
+        logger.warn('Auto-invoice generation failed', { jobId: id, error: invoiceErr.message, event: 'auto_invoice_error' });
+      }
     }
 
     // Route to next agent if not terminal

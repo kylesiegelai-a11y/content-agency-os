@@ -981,6 +981,168 @@ app.post('/api/dead-letter-queue/:jobId/retry', authenticateToken, async (req, r
 });
 
 // ============================================================================
+// BILLING & INVOICES
+// ============================================================================
+
+const billing = require('./utils/billing');
+
+/**
+ * GET /api/invoices
+ * List invoices with optional filters: ?status=draft|sent|paid&client=name&jobId=id
+ */
+app.get('/api/invoices', authenticateToken, async (req, res) => {
+  try {
+    const { status, client, jobId } = req.query;
+    const result = await billing.listInvoices({ status, client, jobId });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('[API] GET /api/invoices error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/invoices/summary
+ * Billing summary with revenue, outstanding, averages. ?period=month|quarter|year|all
+ */
+app.get('/api/invoices/summary', authenticateToken, async (req, res) => {
+  try {
+    const { period = 'all' } = req.query;
+    const summary = await billing.getBillingSummary(period);
+    res.json({ success: true, summary });
+  } catch (error) {
+    console.error('[API] GET /api/invoices/summary error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/invoices/:invoiceId
+ * Get a single invoice
+ */
+app.get('/api/invoices/:invoiceId', authenticateToken, async (req, res) => {
+  try {
+    const invoice = await billing.getInvoice(req.params.invoiceId);
+    if (!invoice) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    res.json({ success: true, invoice });
+  } catch (error) {
+    console.error('[API] GET /api/invoices/:invoiceId error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/invoices
+ * Manually create an invoice (for retainer billing or ad-hoc charges)
+ */
+app.post('/api/invoices', authenticateToken, async (req, res) => {
+  try {
+    const { client, lineItems, notes, dueInDays = 30 } = req.body;
+
+    if (!client?.name || !lineItems?.length) {
+      return res.status(400).json({ error: 'client.name and lineItems[] are required' });
+    }
+
+    const total = lineItems.reduce((sum, li) => sum + (li.total || li.unitPrice * (li.quantity || 1)), 0);
+    const now = new Date();
+    const dueDate = new Date(now);
+    dueDate.setDate(dueDate.getDate() + dueInDays);
+
+    const { v4: uuidv4 } = require('uuid');
+    const invoice = {
+      id: `inv_${uuidv4().slice(0, 8)}`,
+      jobId: null,
+      client: { name: client.name, email: client.email || null },
+      lineItems: lineItems.map(li => ({
+        description: li.description || 'Service',
+        quantity: li.quantity || 1,
+        unitPrice: li.unitPrice || 0,
+        total: li.total || li.unitPrice * (li.quantity || 1)
+      })),
+      subtotal: total,
+      tax: 0,
+      total,
+      currency: 'USD',
+      billingModel: req.body.billingModel || 'per_piece',
+      status: billing.INVOICE_STATUS.DRAFT,
+      issuedAt: now.toISOString(),
+      dueAt: dueDate.toISOString(),
+      paidAt: null,
+      stripeInvoiceId: null,
+      stripePaymentIntentId: null,
+      notes: notes || null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+
+    // Save via billing module internals (read-modify-write)
+    const { readData, writeData } = require('./utils/storage');
+    let data = await readData('invoices.json');
+    if (!data || !Array.isArray(data.invoices)) {
+      data = { invoices: [], summary: {} };
+    }
+    data.invoices.push(invoice);
+    await writeData('invoices.json', data);
+
+    res.status(201).json({ success: true, invoice });
+  } catch (error) {
+    console.error('[API] POST /api/invoices error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/invoices/:invoiceId/send
+ * Send a draft invoice (marks as sent, triggers Stripe if configured)
+ */
+app.post('/api/invoices/:invoiceId/send', authenticateToken, async (req, res) => {
+  try {
+    const result = await billing.sendInvoice(req.params.invoiceId);
+    if (!result) return res.status(404).json({ error: 'Invoice not found' });
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ success: true, invoice: result });
+  } catch (error) {
+    console.error('[API] POST /api/invoices/:invoiceId/send error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/invoices/:invoiceId/pay
+ * Mark an invoice as paid
+ */
+app.post('/api/invoices/:invoiceId/pay', authenticateToken, async (req, res) => {
+  try {
+    const { notes, stripePaymentIntentId } = req.body || {};
+    const result = await billing.markInvoicePaid(req.params.invoiceId, { notes, stripePaymentIntentId });
+    if (!result) return res.status(404).json({ error: 'Invoice not found' });
+    res.json({ success: true, invoice: result });
+  } catch (error) {
+    console.error('[API] POST /api/invoices/:invoiceId/pay error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/invoices/:invoiceId/cancel
+ * Cancel a draft or sent invoice
+ */
+app.post('/api/invoices/:invoiceId/cancel', authenticateToken, async (req, res) => {
+  try {
+    const { reason } = req.body || {};
+    const result = await billing.cancelInvoice(req.params.invoiceId, reason);
+    if (!result) return res.status(404).json({ error: 'Invoice not found' });
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json({ success: true, invoice: result });
+  } catch (error) {
+    console.error('[API] POST /api/invoices/:invoiceId/cancel error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
 // STATIC FILE SERVING
 // ============================================================================
 
@@ -1048,7 +1210,8 @@ async function startServer() {
       'portfolio.json': { items: [] },
       'approvals.json': { items: [] },
       'niches.json': { niches: {} },
-      'ledger.json': { transactions: [], total: 0 }
+      'ledger.json': { transactions: [], total: 0 },
+      'invoices.json': { invoices: [], summary: { totalInvoiced: 0, totalPaid: 0, totalOutstanding: 0 } }
     };
     for (const [fileName, defaultContent] of Object.entries(dataStores)) {
       await storage.initialize(fileName, defaultContent);
