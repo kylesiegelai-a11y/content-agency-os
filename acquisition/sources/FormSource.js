@@ -65,16 +65,18 @@ class FormSource extends AcquisitionSource {
       errors.push('title is required and must be a non-empty string');
     }
 
+    // Accept both form-friendly (name, email, company) and schema-friendly (client_name, etc.) field names
     const hasClientInfo = !!(
-      raw.client_name ||
-      raw.client_email ||
-      raw.company_name
+      raw.client_name || raw.name ||
+      raw.client_email || raw.email ||
+      raw.company_name || raw.company
     );
     if (!hasClientInfo) {
       errors.push('At least one of client_name, client_email, or company_name is required');
     }
 
-    if (raw.client_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw.client_email)) {
+    const email = raw.client_email || raw.email;
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       errors.push('client_email must be a valid email format');
     }
 

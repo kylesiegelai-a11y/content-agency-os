@@ -1683,13 +1683,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
 // ============================================================================
 // SERVER STARTUP
+// NOTE: The 404 catch-all handler is added inside startServer() after all
+// dynamic routes (like acquisition) are mounted, to avoid order-of-registration issues.
 // ============================================================================
 
 async function startServer() {
@@ -1769,6 +1766,11 @@ async function startServer() {
     const acquisitionRouter = createAcquisitionRouter(acquisitionEngine, storage, authenticateToken);
     app.use('/api/acquisition', acquisitionRouter);
     console.log('[Server] Acquisition engine ready');
+
+    // 404 handler — must be last, after all routes are mounted
+    app.use((req, res) => {
+      res.status(404).json({ error: 'Not found' });
+    });
 
     // Start server
     const server = app.listen(PORT, () => {
