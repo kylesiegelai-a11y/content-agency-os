@@ -53,14 +53,24 @@ class AcquisitionSource {
   }
 
   /**
-   * Get health status of this source
+   * Get health status of this source.
+   * Status categories:
+   *   - enabled + healthy:      fully operational
+   *   - enabled + !healthy:     enabled but unavailable (last fetch errored)
+   *   - !enabled:               disabled by configuration
+   *   - mockOnly (set by registry): only active in mock mode
    */
   getStatus() {
+    let effectiveStatus = 'disabled';
+    if (this.enabled && this._healthy) effectiveStatus = 'healthy';
+    else if (this.enabled && !this._healthy) effectiveStatus = 'unavailable';
+
     return {
       name: this.name,
       sourceType: this.sourceType,
       enabled: this.enabled,
       healthy: this._healthy,
+      effectiveStatus,
       lastError: this._lastError,
       lastFetchAt: this._lastFetchAt,
       stats: { ...this._stats }

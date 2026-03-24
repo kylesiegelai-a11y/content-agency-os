@@ -39,8 +39,7 @@ Services available:
   - anthropic
   - gmail
   - drive
-  - upwork
-  - calendly
+  - calendly${MOCK_MODE ? '\n  - upwork (mock only)' : ''}
 
 Usage: const service = getService('serviceName');
   `);
@@ -176,10 +175,16 @@ function clearCache() {
 
 /**
  * Get all available service names
+ * Note: 'upwork' is only available in mock mode (no real provider exists).
+ * Production acquisition uses the acquisition engine's MarketplaceSource instead.
  * @returns {Array} List of service names
  */
 function getAvailableServices() {
-  return ['anthropic', 'gmail', 'drive', 'upwork', 'calendly'];
+  const services = ['anthropic', 'gmail', 'drive', 'calendly'];
+  if (MOCK_MODE) {
+    services.push('upwork');
+  }
+  return services;
 }
 
 /**

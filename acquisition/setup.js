@@ -75,20 +75,37 @@ function initializeAcquisition(options = {}) {
     logger.info('[Acquisition] Referral source enabled');
   }
 
-  // 5. Marketplace (Upwork) source
+  // 5. Marketplace source (optional, requires explicit connector)
+  //    In production, a real marketplace connector must be provided via options.marketplaceService.
+  //    In mock mode, the UpworkMock from serviceFactory is used for development/testing only.
   if (SOURCE_CONFIG.marketplace) {
     try {
-      const upworkService = serviceFactory ? serviceFactory.getService('upwork') : null;
-      if (upworkService) {
-        const marketplaceSource = new MarketplaceSource(upworkService, {
+      let marketplaceService = options.marketplaceService || null;
+
+      // In mock mode only, fall back to the serviceFactory UpworkMock for dev/test
+      if (!marketplaceService && MOCK_MODE && serviceFactory) {
+        try {
+          marketplaceService = serviceFactory.getService('upwork');
+        } catch (e) {
+          logger.warn(`[Acquisition] Marketplace mock fallback failed: ${e.message}`);
+        }
+      }
+
+      if (marketplaceService) {
+        const marketplaceSource = new MarketplaceSource(marketplaceService, {
           enabled: true,
           mockMode: MOCK_MODE
         });
-        // In mock mode, register as mock-only so it's blocked in production
-        registry.register(marketplaceSource, { mockOnly: !MOCK_MODE ? false : true });
-        logger.info(`[Acquisition] Marketplace source enabled (mockMode=${MOCK_MODE})`);
+        // Always register as mockOnly when using mock service so it's blocked in production
+        const isMock = MOCK_MODE || !!(marketplaceService.constructor && marketplaceService.constructor.name.toLowerCase().includes('mock'));
+        registry.register(marketplaceSource, { mockOnly: isMock });
+        logger.info(`[Acquisition] Marketplace source enabled (mockMode=${MOCK_MODE}, mockOnly=${isMock})`);
       } else {
-        logger.warn('[Acquisition] Marketplace source skipped: no upwork service available');
+        if (!MOCK_MODE) {
+          logger.info('[Acquisition] Marketplace source not configured: no real marketplace connector provided. This is expected if marketplace acquisition is not enabled.');
+        } else {
+          logger.warn('[Acquisition] Marketplace source skipped: no marketplace service available');
+        }
       }
     } catch (err) {
       logger.warn(`[Acquisition] Marketplace source skipped: ${err.message}`);

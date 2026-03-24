@@ -28,8 +28,12 @@ const { getService, isMockMode } = require('./utils/serviceFactory');
 const anthropic = getService('anthropic');
 const gmail = getService('gmail');
 const drive = getService('drive');
-const upwork = getService('upwork');
 const calendly = getService('calendly');
+
+// Upwork is only available in mock mode — in production, use the acquisition engine's MarketplaceSource
+if (isMockMode()) {
+  const upwork = getService('upwork');
+}
 
 // Check current mode
 console.log(isMockMode()); // true or false
@@ -455,6 +459,8 @@ When ready to use real providers:
 3. Replace stub methods with actual API calls
 4. Update response structures to match real API formats
 5. Set `MOCK_MODE=false` in production environment
+
+**Note on Upwork/Marketplace:** In production, opportunity acquisition goes through the acquisition engine (`acquisition/acquisitionEngine.js`), not through `serviceFactory.getService('upwork')` directly. To add a real marketplace connector, provide it as `options.marketplaceService` when calling `initializeAcquisition()` in `acquisition/setup.js`. The UpworkMock is only used in mock mode for development/testing.
 
 ## Storage and Persistence
 

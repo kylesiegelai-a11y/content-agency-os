@@ -2,7 +2,10 @@
 export default {
   content: [
     './dashboard/index.html',
-    './dashboard/**/*.{js,jsx}',
+    './dashboard/main.jsx',
+    './dashboard/App.jsx',
+    './dashboard/components/**/*.{js,jsx}',
+    './dashboard/panels/**/*.{js,jsx}',
   ],
   theme: {
     extend: {

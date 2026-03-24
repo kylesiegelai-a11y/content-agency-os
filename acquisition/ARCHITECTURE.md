@@ -12,11 +12,21 @@ The new acquisition engine treats all lead sources as pluggable modules that con
 
 ## Production Safety Guarantees
 
-1. **No fabricated opportunities in production.** If no sources return data, the system reports zero results honestly. The `generateSampleOpportunities()` function has been removed from the research agent.
+1. **No fabricated opportunities in production.** If no sources return data, the system reports zero results honestly. The old `generateSampleOpportunities()` function and direct Upwork service calls have been fully removed from the research agent.
 
-2. **No silent mock fallback.** In production mode (MOCK_MODE=false), mock-only sources are blocked by the SourceRegistry. The serviceFactory no longer silently returns UpworkMock in production. If a source is unavailable, it fails with a structured error.
+2. **No silent mock fallback.** In production mode (MOCK_MODE=false), mock-only sources are blocked by the SourceRegistry. The serviceFactory lists `upwork` only in mock mode. If a marketplace connector is not configured in production, the system reports this clearly — it never silently uses mock data.
 
-3. **Strict production enforcement.** ACQUISITION_STRICT_PRODUCTION (default: true) prevents mock-only sources from registering in production. Each source reports its health and availability clearly.
+3. **Strict production enforcement.** ACQUISITION_STRICT_PRODUCTION (default: true) prevents mock-only sources from registering in production. Each source reports its health and availability with a clear `effectiveStatus`: `healthy`, `unavailable`, `disabled`, or `mock_only`.
+
+4. **Single acquisition path.** The acquisition engine (`acquisitionEngine.js`) is the only path for opportunity ingestion. The research agent (`agents/research.js`) now only *analyzes* pre-fetched opportunities — it never fetches them directly. No agent bypasses the acquisition engine for opportunity discovery.
+
+## Marketplace Source Behavior
+
+The marketplace source (e.g., Upwork) is **explicitly optional**. If no real marketplace connector is configured:
+
+- In **production**: The source is simply not registered. No error, no mock data, no pretending. The system operates normally with its other sources (form, gmail, referral, CSV import).
+- In **mock mode**: The UpworkMock from serviceFactory is used for development/testing. It is registered with `mockOnly: true` so it is automatically excluded in production.
+- The source status endpoint (`GET /api/acquisition/sources`) clearly shows whether each source is `healthy`, `unavailable`, `disabled`, or `mock_only`.
 
 ## Architecture Overview
 

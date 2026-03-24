@@ -61,7 +61,10 @@ class SourceRegistry {
   }
 
   /**
-   * Get full status of all registered sources
+   * Get full status of all registered sources.
+   * Each status includes:
+   *   effectiveStatus: 'healthy' | 'unavailable' | 'disabled' | 'mock_only'
+   *   activeInCurrentMode: whether this source will participate in acquisition cycles
    */
   getSourceStatuses() {
     const statuses = [];
@@ -69,6 +72,12 @@ class SourceRegistry {
       const status = entry.source.getStatus();
       status.mockOnly = entry.mockOnly;
       status.activeInCurrentMode = entry.source.enabled && (!entry.mockOnly || this._mockMode);
+
+      // Override effectiveStatus for mock-only sources when not in mock mode
+      if (entry.mockOnly && !this._mockMode) {
+        status.effectiveStatus = 'mock_only';
+      }
+
       statuses.push(status);
     }
     return statuses;

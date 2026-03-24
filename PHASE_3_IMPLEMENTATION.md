@@ -9,7 +9,8 @@ This document describes the complete Phase 3 Revenue Engine implementation for C
 **Complete PROSPECT → PITCH → PRODUCE → DELIVER pipeline runner**
 
 #### PROSPECT Stage
-- Research agent discovers opportunities
+- Acquisition engine ingests opportunities from all configured sources (form, gmail, referral, CSV import, marketplace)
+- Research agent analyzes pre-fetched opportunities for strategic fit
 - Opportunity Scorer evaluates fit (niche match, budget, client reputation)
 - Scoring algorithm: combines 4 factors (nicheMatch, budgetScore, clientScore, skillsMatch)
 - High-scoring opportunities added to approval queue for owner approval

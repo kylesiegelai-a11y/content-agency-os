@@ -1,35 +1,38 @@
 /**
  * Research Agent
- * Discovers opportunities based on agency skills/niches.
- * Uses the acquisition engine when available, falls back to direct service calls.
- * NOTE: In production mode, zero opportunities means zero opportunities.
- * Sample/demo data is never fabricated outside explicit mock mode.
+ * Analyzes opportunities that have already been ingested by the acquisition engine.
+ *
+ * IMPORTANT: This agent does NOT fetch opportunities itself. All opportunity
+ * ingestion goes through the acquisition engine (acquisition/acquisitionEngine.js).
+ * This agent receives already-ingested opportunities and uses Claude to produce
+ * strategic analysis: top matches, effort estimates, earnings potential, and
+ * bidding strategy.
+ *
+ * Production safety: zero opportunities means zero opportunities — no fabrication.
  */
 
 const ApiClient = require('../utils/apiClient');
-const serviceFactory = require('../utils/serviceFactory');
 const { readData, writeData, appendToArray } = require('../utils/storage');
 const { getPromptManager } = require('../utils/promptManager');
 const logger = require('../utils/logger');
 
 /**
- * Research and discover Upwork opportunities
+ * Analyze and rank opportunities for strategic fit.
+ * Opportunities must be provided in job.opportunities (sourced from the acquisition engine).
+ *
  * @param {Object} job - Job object
- * @param {Array} job.niches - Target niches/specialties
- * @param {Array} job.keywords - Search keywords
- * @param {Object} job.filters - Additional filters (budget, experience_level, etc.)
- * @param {number} job.maxResults - Max results to return (default 20)
+ * @param {Array} job.opportunities - Pre-fetched opportunities from the acquisition engine
+ * @param {Array} job.niches - Target niches/specialties (for analysis context)
+ * @param {Array} job.keywords - Search keywords (for analysis context)
+ * @param {number} job.maxResults - Max results to analyze (default 20)
  * @param {Object} context - Optional context
- * @returns {Promise<Object>} Opportunities list with details
+ * @returns {Promise<Object>} Analysis results with ranked opportunities
  */
 async function research(job, context = {}) {
   const jobId = job.jobId || `research_${Date.now()}`;
 
   try {
-    logger.info(`[research] Starting opportunity research for job ${jobId}`);
-
-    // Get Upwork service
-    const upworkService = serviceFactory.getService('upwork');
+    logger.info(`[research] Starting opportunity analysis for job ${jobId}`);
 
     // Get prompt
     const promptManager = getPromptManager();
@@ -39,38 +42,21 @@ async function research(job, context = {}) {
       throw new Error('Research prompt not found');
     }
 
-    // Build search parameters
-    const searchParams = {
-      niches: job.niches || ['content writing', 'article writing', 'blog writing'],
-      keywords: job.keywords || ['content', 'article', 'writing'],
-      filters: job.filters || {},
-      limit: job.maxResults || 20
-    };
+    // Opportunities must come from the acquisition engine — not fetched here.
+    // If the caller hasn't provided them, report zero honestly.
+    let opportunities = job.opportunities || [];
 
-    // Search for opportunities on Upwork
-    let opportunities = [];
-    let rawResults = null;
-
-    try {
-      // Call mock/real Upwork service
-      rawResults = await upworkService.searchOpportunities(searchParams);
-      opportunities = rawResults || [];
-    } catch (error) {
-      logger.warn(`[research] Upwork service error: ${error.message}`);
+    if (!Array.isArray(opportunities)) {
+      logger.warn(`[research] job.opportunities is not an array — treating as empty`);
       opportunities = [];
     }
 
-    // PRODUCTION SAFETY: Never fabricate opportunities.
-    // In mock mode, the mock service already returns test data.
-    // In production, zero results means zero results — reported honestly.
-    if (!opportunities || opportunities.length === 0) {
-      const MOCK_MODE = process.env.MOCK_MODE === 'true' || process.env.MOCK_MODE === '1';
-      if (MOCK_MODE) {
-        logger.info(`[research] No opportunities found in mock mode — mock service may be empty`);
-      } else {
-        logger.info(`[research] No opportunities found from source — reporting zero results honestly`);
-      }
-      opportunities = [];
+    // Trim to maxResults
+    const maxResults = job.maxResults || 20;
+    opportunities = opportunities.slice(0, maxResults);
+
+    if (opportunities.length === 0) {
+      logger.info(`[research] No opportunities provided for analysis — reporting zero results honestly`);
     }
 
     // Use Claude to analyze and rank opportunities
@@ -146,13 +132,13 @@ Analyze these opportunities and provide:
       timestamp: new Date().toISOString(),
       agent: 'research',
       jobId,
-      action: 'opportunities_discovered',
+      action: 'opportunities_analyzed',
       opportunityCount: opportunities.length,
       niches: job.niches,
       status: 'completed'
     });
 
-    logger.info(`[research] Research completed for job ${jobId}: ${opportunities.length} opportunities found`);
+    logger.info(`[research] Analysis completed for job ${jobId}: ${opportunities.length} opportunities analyzed`);
 
     return researchData;
   } catch (error) {

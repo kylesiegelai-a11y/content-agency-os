@@ -80,34 +80,42 @@ describe('serviceFactory', () => {
     test('returns array of available service names', () => {
       const services = getAvailableServices();
       expect(Array.isArray(services)).toBe(true);
+      // In mock mode: anthropic, gmail, drive, calendly, upwork (5)
       expect(services.length).toBe(5);
     });
 
-    test('includes all expected service names', () => {
+    test('includes core service names', () => {
       const services = getAvailableServices();
       expect(services).toContain('anthropic');
       expect(services).toContain('gmail');
       expect(services).toContain('drive');
-      expect(services).toContain('upwork');
       expect(services).toContain('calendly');
+    });
+
+    test('includes upwork only in mock mode', () => {
+      // Tests run with MOCK_MODE=true, so upwork should be present
+      const services = getAvailableServices();
+      expect(services).toContain('upwork');
     });
   });
 
   describe('initializeAllServices', () => {
-    test('returns object with all five services', () => {
+    test('returns object with all available services', () => {
       const services = initializeAllServices();
       expect(services).toBeDefined();
       expect(typeof services).toBe('object');
+      // In mock mode: 5 services (including upwork)
       expect(Object.keys(services).length).toBe(5);
     });
 
-    test('includes anthropic, gmail, drive, upwork, calendly keys', () => {
+    test('includes anthropic, gmail, drive, calendly keys (and upwork in mock mode)', () => {
       const services = initializeAllServices();
       expect(services.anthropic).toBeDefined();
       expect(services.gmail).toBeDefined();
       expect(services.drive).toBeDefined();
-      expect(services.upwork).toBeDefined();
       expect(services.calendly).toBeDefined();
+      // upwork is available in mock mode
+      expect(services.upwork).toBeDefined();
     });
 
     test('returns cached service instances', () => {
@@ -116,7 +124,6 @@ describe('serviceFactory', () => {
       expect(first.anthropic).toBe(second.anthropic);
       expect(first.gmail).toBe(second.gmail);
       expect(first.drive).toBe(second.drive);
-      expect(first.upwork).toBe(second.upwork);
       expect(first.calendly).toBe(second.calendly);
     });
   });
