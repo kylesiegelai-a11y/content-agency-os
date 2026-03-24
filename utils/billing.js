@@ -47,10 +47,53 @@ async function readInvoices() {
 
 /**
  * Generate an invoice for a delivered job.
- * Called automatically when a job reaches DELIVERED state.
+ * Routed through executeOperation for durable pre-write, idempotency,
+ * kill-switch, dry-run, and audit trail.
  */
 async function generateInvoice(job) {
-  // Idempotency: check if invoice already exists for this job
+  const { executeOperation, makeIdempotencyKey } = require('./operationLog');
+  const { validateInvoiceGeneration } = require('./policyGuards');
+
+  const clientName = job.data?.client || job.client?.name || 'Unknown Client';
+  const pricing = resolveJobPricing(job);
+
+  const opResult = await executeOperation({
+    actionType: 'invoice_generate',
+    jobId: job.id,
+    target: clientName,
+    qualifier: `${pricing.amount}`,
+    input: { jobId: job.id, amount: pricing.amount, client: clientName },
+    validate: (input) => validateInvoiceGeneration(input),
+    execute: async () => {
+      return await _createInvoice(job, pricing);
+    }
+  });
+
+  // Return the invoice from the operation result, or look it up if duplicate
+  if (opResult.status === 'completed' && opResult.result) {
+    // The result has the invoice (possibly redacted). Look up by job.
+    const existingInvoices = await readInvoices();
+    const inv = existingInvoices.find(i => i.jobId === job.id && i.status !== 'cancelled');
+    return inv || opResult.result;
+  }
+  if (opResult.status === 'duplicate') {
+    // Already invoiced — return existing
+    const existingInvoices = await readInvoices();
+    return existingInvoices.find(i => i.jobId === job.id && i.status !== 'cancelled') || null;
+  }
+
+  // blocked, killed, dry_run, failed — log and return null
+  logger.info('[billing] Invoice generation not executed', {
+    jobId: job.id, status: opResult.status, reason: opResult.result?.reason
+  });
+  return null;
+}
+
+/**
+ * Inner invoice creation logic (called inside executeOperation).
+ */
+async function _createInvoice(job, pricing) {
+  // Business-level dedup: still check for existing invoice
   const existingInvoices = await readInvoices();
   const existingForJob = existingInvoices.find(inv => inv.jobId === job.id && inv.status !== 'cancelled');
   if (existingForJob) {
@@ -62,9 +105,6 @@ async function generateInvoice(job) {
   const now = new Date();
   const dueDate = new Date(now);
   dueDate.setDate(dueDate.getDate() + 30); // Net 30
-
-  // Determine pricing
-  const pricing = resolveJobPricing(job);
 
   const invoice = {
     id: invoiceId,
@@ -83,7 +123,7 @@ async function generateInvoice(job) {
     tax: 0,
     total: pricing.amount,
     currency: 'USD',
-    billingModel: pricing.model, // 'per_piece' or 'retainer'
+    billingModel: pricing.model,
     status: INVOICE_STATUS.DRAFT,
     issuedAt: now.toISOString(),
     dueAt: dueDate.toISOString(),

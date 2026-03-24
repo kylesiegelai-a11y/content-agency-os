@@ -46,6 +46,24 @@ jest.mock('uuid', () => ({
   v4: jest.fn(() => 'test-uuid-1234-5678-9012-3456')
 }));
 
+// Mock operationLog — executeOperation passthrough (just runs execute fn directly)
+jest.mock('../../utils/operationLog', () => ({
+  executeOperation: jest.fn(async ({ execute, input }) => {
+    const result = await execute(input);
+    return { status: 'completed', result };
+  }),
+  makeIdempotencyKey: jest.fn((...args) => args.join(':')),
+}));
+
+// Mock policyGuards — always allow in billing unit tests
+jest.mock('../../utils/policyGuards', () => ({
+  validateInvoiceGeneration: jest.fn(async () => ({ allowed: true })),
+  validateEmailSend: jest.fn(async () => ({ allowed: true })),
+  validateDelivery: jest.fn(async () => ({ allowed: true })),
+  validateNotification: jest.fn(async () => ({ allowed: true })),
+  POLICY: {}
+}));
+
 // Helper function to test recalcSummary behavior through the API
 // Since recalcSummary is internal, we test its logic via integration
 function testSummaryCalculation(invoices) {

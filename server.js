@@ -1782,6 +1782,19 @@ async function startServer() {
     });
     await appState.scheduler.initialize();
 
+    // ── Startup reconciliation: mark stale operations for review ──────
+    try {
+      const { reconcileStaleOperations } = require('./utils/operationLog');
+      const recovery = await reconcileStaleOperations();
+      if (recovery.markedCount > 0) {
+        console.warn(`[Server] RECOVERY: ${recovery.markedCount} stale operations marked for review. Use GET /api/operator/recovery to inspect.`);
+      } else {
+        console.log('[Server] Operation reconciliation: no stale operations found');
+      }
+    } catch (recoveryErr) {
+      console.error('[Server] Operation reconciliation failed:', recoveryErr.message);
+    }
+
     // Initialize acquisition engine
     console.log('[Server] Initializing acquisition engine...');
     const serviceFactory = require('./utils/serviceFactory');
@@ -1823,12 +1836,10 @@ app.get('/api/operator/daily-summary', authenticateToken, async (req, res) => {
  */
 app.get('/api/operator/operations', authenticateToken, async (req, res) => {
   try {
-    const { readData } = require('./utils/storage');
-    const data = await readData('operations.json');
-    const ops = (data && data.operations) || [];
+    const { getRecentOperations } = require('./utils/operationLog');
     const limit = Math.min(parseInt(req.query.limit) || 50, 500);
-    const recent = ops.slice(-limit).reverse();
-    res.json({ success: true, operations: recent, total: ops.length });
+    const ops = await getRecentOperations(limit);
+    res.json({ success: true, operations: ops, total: ops.length });
   } catch (error) {
     console.error('[API] Operations log error:', error.message);
     res.status(500).json({ error: 'Failed to retrieve operations' });
@@ -1847,6 +1858,27 @@ app.get('/api/operator/job/:jobId/operations', authenticateToken, async (req, re
   } catch (error) {
     console.error('[API] Job operations error:', error.message);
     res.status(500).json({ error: 'Failed to retrieve job operations' });
+  }
+});
+
+/**
+ * GET /api/operator/recovery
+ * Operations requiring manual operator review after crash/restart
+ */
+app.get('/api/operator/recovery', authenticateToken, async (req, res) => {
+  try {
+    const { getRecoveryRequired } = require('./utils/operationLog');
+    const ops = await getRecoveryRequired();
+    res.json({
+      success: true,
+      recoveryRequired: ops.length,
+      operations: ops,
+      note: 'These operations were in PENDING or EXECUTING state when the system restarted. ' +
+            'Side-effects may or may not have completed. Review each and resolve manually.'
+    });
+  } catch (error) {
+    console.error('[API] Recovery operations error:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve recovery operations' });
   }
 });
 

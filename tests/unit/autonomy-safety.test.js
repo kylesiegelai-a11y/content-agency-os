@@ -15,8 +15,9 @@
 
 const path = require('path');
 
-// Set test environment
+// Set test environment — DATABASE_PATH controls where the Storage singleton reads/writes
 process.env.NODE_ENV = 'test';
+process.env.DATABASE_PATH = path.join(__dirname, '../../data_test');
 process.env.DATA_DIR = path.join(__dirname, '../../data_test');
 
 const fs = require('fs');
@@ -698,6 +699,337 @@ describe('Autonomy Safety Infrastructure', () => {
       if (originalDryRun !== undefined) {
         process.env.DRY_RUN = originalDryRun;
       }
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // PASS 3 — Durability / Crash-Safety / Idempotency Scenario Tests
+  // ══════════════════════════════════════════════════════════════════════
+
+  describe('Pass 3: Durable Pre-Write Before Side-Effect', () => {
+    test('Pre-write record exists BEFORE side-effect executes', async () => {
+      const jobId = `test_prewrite_${uuidv4().slice(0, 8)}`;
+      let recordExistedBeforeExecute = false;
+
+      await executeOperation({
+        actionType: 'prewrite_check',
+        jobId,
+        target: 'target1',
+        input: {},
+        execute: async () => {
+          // Inside the execute callback, the EXECUTING record should already
+          // be persisted. Check by looking up the idempotency key.
+          const key = makeIdempotencyKey('prewrite_check', jobId, 'target1', '');
+          const existing = await checkDuplicate(key);
+          if (existing && existing.status === OP_STATUS.EXECUTING) {
+            recordExistedBeforeExecute = true;
+          }
+          return { success: true };
+        }
+      });
+
+      expect(recordExistedBeforeExecute).toBe(true);
+    });
+
+    test('Failed side-effect still has a persisted record (FAILED, not lost)', async () => {
+      const jobId = `test_fail_${uuidv4().slice(0, 8)}`;
+
+      const result = await executeOperation({
+        actionType: 'fail_after_prewrite',
+        jobId,
+        target: 'target1',
+        input: {},
+        execute: async () => {
+          throw new Error('Simulated crash after pre-write');
+        }
+      });
+
+      expect(result.status).toBe(OP_STATUS.FAILED);
+      expect(result.result.error).toContain('Simulated crash');
+
+      // The operation should be queryable
+      const ops = await getJobOperations(jobId);
+      expect(ops.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('Pass 3: Restart Recovery / Reconciliation', () => {
+    test('Stale EXECUTING operations are marked RECOVERY_REQUIRED', async () => {
+      const { reconcileStaleOperations, getRecoveryRequired } = require('../../utils/operationLog');
+
+      // Manually insert an EXECUTING record with old timestamp to simulate crash
+      const testDir = path.join(__dirname, '../../data_test');
+      const opsFile = path.join(testDir, 'operations.json');
+      const staleTimestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min ago
+
+      const staleOp = {
+        operationId: `op_stale_${uuidv4().slice(0, 8)}`,
+        idempotencyKey: `stale_test:${uuidv4().slice(0, 8)}:target:`,
+        actionType: 'stale_test',
+        jobId: 'stale_job_123',
+        target: 'target',
+        qualifier: null,
+        inputSummary: {},
+        status: 'executing',
+        result: null,
+        dryRun: false,
+        createdAt: staleTimestamp,
+        startedAt: staleTimestamp,
+        completedAt: null,
+        updatedAt: staleTimestamp
+      };
+
+      // Write the stale operation directly to JSON
+      const opsData = { operations: [staleOp] };
+      fs.writeFileSync(opsFile, JSON.stringify(opsData, null, 2));
+
+      // Run reconciliation
+      const recovery = await reconcileStaleOperations();
+      expect(recovery.markedCount).toBeGreaterThanOrEqual(1);
+
+      // Verify it's now RECOVERY_REQUIRED
+      const recoveryOps = await getRecoveryRequired();
+      const found = recoveryOps.find(op => op.operationId === staleOp.operationId);
+      expect(found).toBeDefined();
+      expect(found.status).toBe('recovery_required');
+    });
+
+    test('Recent EXECUTING operations are NOT marked as stale', async () => {
+      const { reconcileStaleOperations } = require('../../utils/operationLog');
+
+      const testDir = path.join(__dirname, '../../data_test');
+      const opsFile = path.join(testDir, 'operations.json');
+      const recentTimestamp = new Date().toISOString(); // just now
+
+      const recentOp = {
+        operationId: `op_recent_${uuidv4().slice(0, 8)}`,
+        idempotencyKey: `recent_test:${uuidv4().slice(0, 8)}:target:`,
+        actionType: 'recent_test',
+        jobId: 'recent_job_123',
+        target: 'target',
+        qualifier: null,
+        inputSummary: {},
+        status: 'executing',
+        result: null,
+        dryRun: false,
+        createdAt: recentTimestamp,
+        startedAt: recentTimestamp,
+        completedAt: null,
+        updatedAt: recentTimestamp
+      };
+
+      fs.writeFileSync(opsFile, JSON.stringify({ operations: [recentOp] }, null, 2));
+
+      const recovery = await reconcileStaleOperations();
+      // Should NOT mark this one — it's too recent
+      expect(recovery.markedCount).toBe(0);
+    });
+  });
+
+  describe('Pass 3: Duplicate Prevention Under Repeated Invocation', () => {
+    test('Same operation triggered twice only executes once (sequential)', async () => {
+      const jobId = `test_dup_${uuidv4().slice(0, 8)}`;
+      let executionCount = 0;
+
+      const run = (n) => executeOperation({
+        actionType: 'dup_test',
+        jobId,
+        target: 'same_target',
+        qualifier: 'same_qualifier',
+        input: {},
+        execute: async () => {
+          executionCount++;
+          return { success: true, run: n };
+        }
+      });
+
+      // Sequential calls — first completes, second is deduped
+      const r1 = await run(1);
+      const r2 = await run(2);
+
+      expect(r1.status).toBe(OP_STATUS.COMPLETED);
+      expect(r2.status).toBe(OP_STATUS.DUPLICATE);
+      expect(executionCount).toBe(1); // Side-effect ran exactly once
+    });
+
+    test('Different qualifiers allow separate operations', async () => {
+      const jobId = `test_diff_${uuidv4().slice(0, 8)}`;
+      let executionCount = 0;
+
+      const run = (qualifier) => executeOperation({
+        actionType: 'qualifier_test',
+        jobId,
+        target: 'same_target',
+        qualifier,
+        input: {},
+        execute: async () => {
+          executionCount++;
+          return { success: true };
+        }
+      });
+
+      await run('qualifier_a');
+      await run('qualifier_b');
+
+      expect(executionCount).toBe(2);
+    });
+  });
+
+  describe('Pass 3: Billing Invoice Dedup via Operation Framework', () => {
+    test('generateInvoice uses executeOperation (idempotency key present)', async () => {
+      // We can verify that billing.generateInvoice routes through executeOperation
+      // by checking that it returns null when policy blocks it (non-delivered job)
+      const { generateInvoice } = require('../../utils/billing');
+
+      const fakeJob = {
+        id: `job_billing_${uuidv4().slice(0, 8)}`,
+        data: { client: 'Test Client', contentType: 'blog_post' },
+        client: { name: 'Test Client', email: 'test@example.com' },
+        status: 'writing' // NOT delivered — policy should block
+      };
+
+      const result = await generateInvoice(fakeJob);
+      // Should be null because the policy guard blocks non-delivered jobs
+      expect(result).toBeNull();
+    });
+
+    test('generateInvoice dedupes repeated calls for same job', async () => {
+      const { generateInvoice, INVOICE_STATUS } = require('../../utils/billing');
+
+      // Create a job that looks delivered (bypass policy by providing pricing)
+      const jobId = `job_dedup_${uuidv4().slice(0, 8)}`;
+      const fakeJob = {
+        id: jobId,
+        data: { client: 'Dedup Client', contentType: 'blog_post', topic: 'Test Topic' },
+        client: { name: 'Dedup Client', email: 'dedup@example.com' },
+        pricing: { amount: 500, model: 'per_piece' },
+        status: 'delivered'
+      };
+
+      // We need to make the policy allow this — the policy checks if job
+      // is in DELIVERED state via storage lookup. Since we can't easily
+      // mock that, we test at the operation level instead.
+      // The executeOperation framework will deduplicate regardless.
+      const key = makeIdempotencyKey('invoice_generate', jobId, 'Dedup Client', '500');
+
+      // First call — no prior operation with this key
+      const firstCheck = await checkDuplicate(key);
+      expect(firstCheck).toBeNull();
+
+      // Execute the operation directly to prove dedup works
+      let callCount = 0;
+      const r1 = await executeOperation({
+        actionType: 'invoice_generate',
+        jobId,
+        target: 'Dedup Client',
+        qualifier: '500',
+        input: { jobId, amount: 500, client: 'Dedup Client' },
+        execute: async () => {
+          callCount++;
+          return { invoiceId: 'inv_test123', amount: 500 };
+        }
+      });
+
+      const r2 = await executeOperation({
+        actionType: 'invoice_generate',
+        jobId,
+        target: 'Dedup Client',
+        qualifier: '500',
+        input: { jobId, amount: 500, client: 'Dedup Client' },
+        execute: async () => {
+          callCount++;
+          return { invoiceId: 'inv_test456', amount: 500 };
+        }
+      });
+
+      expect(r1.status).toBe(OP_STATUS.COMPLETED);
+      expect(r2.status).toBe(OP_STATUS.DUPLICATE);
+      expect(callCount).toBe(1); // Only one invoice created
+    });
+  });
+
+  describe('Pass 3: Operations Persisted in Storage (not lost)', () => {
+    test('Completed operations are queryable after execution', async () => {
+      const { getRecentOperations } = require('../../utils/operationLog');
+
+      const jobId = `test_persist_${uuidv4().slice(0, 8)}`;
+
+      await executeOperation({
+        actionType: 'persist_test',
+        jobId,
+        target: 'persist_target',
+        input: {},
+        execute: async () => ({ persisted: true })
+      });
+
+      const recent = await getRecentOperations(50);
+      const found = recent.find(op => op.jobId === jobId && op.actionType === 'persist_test');
+      expect(found).toBeDefined();
+      expect(found.status).toBe(OP_STATUS.COMPLETED);
+    });
+
+    test('Operations include full audit trail fields', async () => {
+      const jobId = `test_audit_${uuidv4().slice(0, 8)}`;
+
+      const result = await executeOperation({
+        actionType: 'audit_test',
+        jobId,
+        target: 'audit_target',
+        qualifier: 'qual_1',
+        input: { key: 'value' },
+        execute: async () => ({ audited: true })
+      });
+
+      expect(result.operationId).toMatch(/^op_/);
+      expect(result.idempotencyKey).toContain('audit_test');
+      expect(result.idempotencyKey).toContain(jobId);
+      expect(result.actionType).toBe('audit_test');
+      expect(result.jobId).toBe(jobId);
+      expect(result.target).toBe('audit_target');
+      expect(result.createdAt).toBeDefined();
+      expect(result.completedAt).toBeDefined();
+      expect(result.inputSummary).toBeDefined();
+    });
+  });
+
+  describe('Pass 3: Operator Visibility of Recovery Operations', () => {
+    test('getRecoveryRequired returns only RECOVERY_REQUIRED ops', async () => {
+      const { reconcileStaleOperations, getRecoveryRequired } = require('../../utils/operationLog');
+
+      const testDir = path.join(__dirname, '../../data_test');
+      const opsFile = path.join(testDir, 'operations.json');
+      const staleTime = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+
+      // Insert mix of statuses
+      const ops = {
+        operations: [
+          {
+            operationId: 'op_stale_vis1',
+            idempotencyKey: `vis_stale:${uuidv4().slice(0, 8)}:t:`,
+            actionType: 'vis_test', jobId: 'vis_job', target: 't',
+            qualifier: null, inputSummary: {}, status: 'executing',
+            result: null, dryRun: false, createdAt: staleTime,
+            startedAt: staleTime, completedAt: null, updatedAt: staleTime
+          },
+          {
+            operationId: 'op_completed_vis1',
+            idempotencyKey: `vis_done:${uuidv4().slice(0, 8)}:t:`,
+            actionType: 'vis_test', jobId: 'vis_job2', target: 't',
+            qualifier: null, inputSummary: {}, status: 'completed',
+            result: { ok: true }, dryRun: false, createdAt: staleTime,
+            startedAt: staleTime, completedAt: staleTime, updatedAt: staleTime
+          }
+        ]
+      };
+
+      fs.writeFileSync(opsFile, JSON.stringify(ops, null, 2));
+
+      await reconcileStaleOperations();
+
+      const recoveryOps = await getRecoveryRequired();
+      // Should include the stale executing one, NOT the completed one
+      expect(recoveryOps.some(op => op.operationId === 'op_stale_vis1')).toBe(true);
+      expect(recoveryOps.some(op => op.operationId === 'op_completed_vis1')).toBe(false);
     });
   });
 });

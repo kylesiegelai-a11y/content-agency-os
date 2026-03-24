@@ -222,6 +222,26 @@ function createTables() {
     )
   `);
 
+  // ── Operations table (durable execution ledger) ──────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS operations (
+      operation_id TEXT PRIMARY KEY,
+      idempotency_key TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      job_id TEXT,
+      target TEXT,
+      qualifier TEXT,
+      input_summary TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      result TEXT,
+      dry_run INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    )
+  `);
+
   // Indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)');
   db.run('CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(type)');
@@ -232,6 +252,10 @@ function createTables() {
   db.run('CREATE INDEX IF NOT EXISTS idx_invoices_job ON invoices(job_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_ledger_job ON ledger(job_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_ledger_type ON ledger(type)');
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_idemp ON operations(idempotency_key)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_ops_status ON operations(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_ops_job ON operations(job_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_ops_created ON operations(created_at)');
 
   logger.info('[Database] Schema ready');
 }
@@ -563,6 +587,215 @@ const ledger = {
   }
 };
 
+// ── Operations (durable execution ledger) ────────────────────────────
+
+const operations = {
+  /**
+   * Insert a new operation record. Used for pre-write before side-effects.
+   * Uses INSERT OR IGNORE on idempotency_key to prevent duplicates atomically.
+   */
+  insert(op) {
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO operations
+        (operation_id, idempotency_key, action_type, job_id, target, qualifier,
+         input_summary, status, result, dry_run, created_at, started_at, completed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run([
+      op.operationId, op.idempotencyKey, op.actionType,
+      op.jobId || null, op.target || null, op.qualifier || null,
+      typeof op.inputSummary === 'string' ? op.inputSummary : JSON.stringify(op.inputSummary || {}),
+      op.status || 'pending',
+      op.result ? JSON.stringify(op.result) : null,
+      op.dryRun ? 1 : 0,
+      op.createdAt || now,
+      op.startedAt || null,
+      op.completedAt || null,
+      now
+    ]);
+    stmt.free();
+    persist();
+    // Return whether a row was actually inserted (0 = duplicate key)
+    return db.getRowsModified() > 0;
+  },
+
+  /**
+   * Update an existing operation's status and result.
+   * Only allows valid forward transitions.
+   */
+  updateStatus(operationId, status, result = null, completedAt = null) {
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      UPDATE operations SET status = ?, result = ?, completed_at = ?, updated_at = ?
+      WHERE operation_id = ?
+    `);
+    stmt.run([
+      status,
+      result ? JSON.stringify(result) : null,
+      completedAt || ((['completed', 'failed', 'recovery_required'].includes(status)) ? now : null),
+      now,
+      operationId
+    ]);
+    stmt.free();
+    persist();
+    return db.getRowsModified() > 0;
+  },
+
+  /**
+   * Find an operation by its deterministic idempotency key.
+   * Returns the most relevant record (completed > executing > pending).
+   */
+  findByIdempotencyKey(key) {
+    const stmt = db.prepare(
+      `SELECT * FROM operations WHERE idempotency_key = ?
+       ORDER BY CASE status
+         WHEN 'completed' THEN 1 WHEN 'executing' THEN 2
+         WHEN 'pending' THEN 3 ELSE 4 END
+       LIMIT 1`
+    );
+    stmt.bind([key]);
+    let row = null;
+    if (stmt.step()) row = deserializeOperation(stmt.getAsObject());
+    stmt.free();
+    return row;
+  },
+
+  /**
+   * Find an operation by its operation_id.
+   */
+  getById(operationId) {
+    const stmt = db.prepare('SELECT * FROM operations WHERE operation_id = ?');
+    stmt.bind([operationId]);
+    let row = null;
+    if (stmt.step()) row = deserializeOperation(stmt.getAsObject());
+    stmt.free();
+    return row;
+  },
+
+  /**
+   * List operations for a specific job.
+   */
+  listByJob(jobId) {
+    const stmt = db.prepare('SELECT * FROM operations WHERE job_id = ? ORDER BY created_at DESC');
+    stmt.bind([jobId]);
+    const rows = [];
+    while (stmt.step()) rows.push(deserializeOperation(stmt.getAsObject()));
+    stmt.free();
+    return rows;
+  },
+
+  /**
+   * List operations by status (e.g. 'recovery_required', 'executing').
+   */
+  listByStatus(status, limit = 100) {
+    const stmt = db.prepare('SELECT * FROM operations WHERE status = ? ORDER BY created_at DESC LIMIT ?');
+    stmt.bind([status, limit]);
+    const rows = [];
+    while (stmt.step()) rows.push(deserializeOperation(stmt.getAsObject()));
+    stmt.free();
+    return rows;
+  },
+
+  /**
+   * Find stale operations: PENDING or EXECUTING older than threshold.
+   * Used by startup reconciliation.
+   */
+  findStale(thresholdIso) {
+    const stmt = db.prepare(`
+      SELECT * FROM operations
+      WHERE status IN ('pending', 'executing')
+        AND created_at < ?
+      ORDER BY created_at ASC
+    `);
+    stmt.bind([thresholdIso]);
+    const rows = [];
+    while (stmt.step()) rows.push(deserializeOperation(stmt.getAsObject()));
+    stmt.free();
+    return rows;
+  },
+
+  /**
+   * Mark stale operations as recovery_required. Returns count updated.
+   */
+  markStaleAsRecovery(thresholdIso) {
+    const now = new Date().toISOString();
+    db.run(`
+      UPDATE operations SET status = 'recovery_required', updated_at = ?
+      WHERE status IN ('pending', 'executing')
+        AND created_at < ?
+    `, [now, thresholdIso]);
+    const count = db.getRowsModified();
+    if (count > 0) persist();
+    return count;
+  },
+
+  /**
+   * Recent operations (for operator dashboard).
+   */
+  listRecent(limit = 50) {
+    const stmt = db.prepare('SELECT * FROM operations ORDER BY created_at DESC LIMIT ?');
+    stmt.bind([limit]);
+    const rows = [];
+    while (stmt.step()) rows.push(deserializeOperation(stmt.getAsObject()));
+    stmt.free();
+    return rows;
+  },
+
+  /**
+   * Daily summary aggregation.
+   */
+  dailySummary(dateStr) {
+    const datePrefix = dateStr + '%';
+    const stmt = db.prepare(`
+      SELECT status, COUNT(*) as cnt FROM operations
+      WHERE created_at LIKE ?
+      GROUP BY status
+    `);
+    stmt.bind([datePrefix]);
+    const byStatus = {};
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      byStatus[row.status] = row.cnt;
+    }
+    stmt.free();
+
+    const typeStmt = db.prepare(`
+      SELECT action_type, COUNT(*) as cnt FROM operations
+      WHERE created_at LIKE ?
+      GROUP BY action_type
+    `);
+    typeStmt.bind([datePrefix]);
+    const byType = {};
+    while (typeStmt.step()) {
+      const row = typeStmt.getAsObject();
+      byType[row.action_type] = row.cnt;
+    }
+    typeStmt.free();
+
+    return { byStatus, byType };
+  }
+};
+
+function deserializeOperation(row) {
+  return {
+    operationId: row.operation_id,
+    idempotencyKey: row.idempotency_key,
+    actionType: row.action_type,
+    jobId: row.job_id,
+    target: row.target,
+    qualifier: row.qualifier,
+    inputSummary: safeJsonParse(row.input_summary, {}),
+    status: row.status,
+    result: safeJsonParse(row.result, null),
+    dryRun: !!row.dry_run,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    updatedAt: row.updated_at
+  };
+}
+
 // ── Generic compatibility layer ─────────────────────────────────────
 // Matches the old storage.js API so agents can keep using
 // readData('jobs.json'), appendToArray('activity.json', item), etc.
@@ -738,6 +971,7 @@ module.exports = {
   activity,
   invoices,
   ledger,
+  operations,
   // Drop-in storage.js compatibility
   readData,
   writeData,

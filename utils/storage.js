@@ -10,6 +10,8 @@ const logger = require('./logger');
 // acquire attempts (e.g. append → read → write all trying to lock the
 // same file).
 
+let _writeCounter = 0; // Monotonic counter for unique temp file paths
+
 class Storage {
   constructor(dataDir = './data') {
     this.dataDir = dataDir;
@@ -80,7 +82,7 @@ class Storage {
 
   async write(fileName, data, createBackup = true) {
     const filePath = this.getFilePath(fileName);
-    const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+    const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${++_writeCounter}`;
     try {
       if (createBackup && fs.existsSync(filePath)) {
         const backupPath = `${filePath}.backup.${Date.now()}`;
