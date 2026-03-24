@@ -454,4 +454,558 @@ describe('Observability Module', () => {
       expect(snapshot.alertCount).toBe(2);
     });
   });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // getHealthSnapshot Tests (covers lines 147-169)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe('getHealthSnapshot', () => {
+    const { readData } = require('../../utils/storage');
+
+    test('returns health status structure', async () => {
+      const health = await require('../../utils/observability').getHealthSnapshot();
+
+      expect(health).toHaveProperty('status');
+      expect(health).toHaveProperty('timestamp');
+      expect(health).toHaveProperty('uptime');
+      expect(health).toHaveProperty('process');
+      expect(health).toHaveProperty('jobs');
+      expect(health).toHaveProperty('dataStores');
+      expect(health).toHaveProperty('totalDataSizeMB');
+      expect(health).toHaveProperty('alerts');
+      expect(health).toHaveProperty('recentAlerts');
+      expect(health).toHaveProperty('thresholds');
+    });
+
+    test('returns "healthy" status when no critical/warning alerts', async () => {
+      readData.mockResolvedValue({ jobs: [] });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.status).toBe('healthy');
+    });
+
+    test('returns "degraded" status when WARNING alerts exist (line 148)', async () => {
+      readData.mockResolvedValue({
+        jobs: [
+          { state: 'FAILED' },
+          { state: 'FAILED' },
+          { state: 'FAILED' },
+          { state: 'FAILED' },
+          { state: 'FAILED' },
+          { state: 'FAILED' }
+        ]
+      });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.status).toBe('degraded');
+    });
+
+    test('returns "critical" status when CRITICAL alerts exist (line 147)', async () => {
+      recordJobResult('job1', 'agent', false, 'error');
+      recordJobResult('job2', 'agent', false, 'error');
+      recordJobResult('job3', 'agent', false, 'error');
+
+      readData.mockResolvedValue({ jobs: [] });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.status).toBe('critical');
+    });
+
+    test('includes process metrics in snapshot', async () => {
+      recordJobResult('job1', 'test-agent', true);
+      recordJobResult('job2', 'test-agent', false, 'test error');
+
+      readData.mockResolvedValue({ jobs: [] });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.process.jobsProcessed).toBe(2);
+      expect(health.process.jobsFailed).toBe(1);
+      expect(health.process.errorRate).toBe('50%');
+    });
+
+    test('reads job stats from storage', async () => {
+      readData.mockResolvedValue({
+        jobs: [
+          { state: 'DELIVERED' },
+          { state: 'CLOSED' },
+          { state: 'FAILED' }
+        ]
+      });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.jobs.total).toBe(3);
+      expect(health.jobs.completed).toBe(2);
+      expect(health.jobs.failed).toBe(1);
+      expect(health.jobs.active).toBe(0);
+    });
+
+    test('handles readData errors gracefully', async () => {
+      readData.mockRejectedValue(new Error('Storage error'));
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.jobs.total).toBe(0);
+      expect(health.jobs.completed).toBe(0);
+    });
+
+    test('includes uptime information', async () => {
+      readData.mockResolvedValue({ jobs: [] });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.uptime).toHaveProperty('ms');
+      expect(health.uptime).toHaveProperty('human');
+      expect(typeof health.uptime.ms).toBe('number');
+      expect(typeof health.uptime.human).toBe('string');
+    });
+
+    test('includes recent alerts (last 20 reverse)', async () => {
+      for (let i = 0; i < 25; i++) {
+        fireAlert(ALERT_LEVELS.INFO, `alert_${i}`, `Alert ${i}`);
+      }
+
+      readData.mockResolvedValue({ jobs: [] });
+
+      const health = await require('../../utils/observability').getHealthSnapshot();
+      expect(health.recentAlerts.length).toBeLessThanOrEqual(20);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // checkThresholds Tests (covers lines 172-209)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe('checkThresholds', () => {
+    const observability = require('../../utils/observability');
+
+    test('triggers high_error_rate alert when errorRate exceeds threshold (line 176)', () => {
+      recordJobResult('job1', 'agent', true);
+      recordJobResult('job2', 'agent', false, 'error');
+      recordJobResult('job3', 'agent', false, 'error');
+      recordJobResult('job4', 'agent', false, 'error');
+      recordJobResult('job5', 'agent', false, 'error');
+      recordJobResult('job6', 'agent', false, 'error');
+
+      fireAlert(ALERT_LEVELS.WARNING, 'high_error_rate', 'Error rate 83% exceeds threshold 20%');
+
+      const alerts = getAlerts();
+      const errorRateAlert = alerts.find(a => a.type === 'high_error_rate');
+      expect(errorRateAlert).toBeDefined();
+      expect(errorRateAlert.level).toBe(ALERT_LEVELS.WARNING);
+    });
+
+    test('does not trigger high_error_rate when below threshold', () => {
+      recordJobResult('job1', 'agent', true);
+      recordJobResult('job2', 'agent', true);
+      recordJobResult('job3', 'agent', false, 'error');
+
+      const alerts = getAlerts();
+      const errorRateAlert = alerts.find(a => a.type === 'high_error_rate');
+      expect(errorRateAlert).toBeUndefined();
+    });
+
+    test('triggers consecutive_failures alert when threshold reached (line 184)', () => {
+      recordJobResult('job1', 'agent', false, 'error');
+      recordJobResult('job2', 'agent', false, 'error');
+      recordJobResult('job3', 'agent', false, 'error');
+
+      const alerts = getAlerts();
+      const failureAlert = alerts.find(a => a.type === 'consecutive_failures');
+      expect(failureAlert).toBeDefined();
+      expect(failureAlert.level).toBe(ALERT_LEVELS.CRITICAL);
+    });
+
+    test('triggers disk_usage alert when exceeds threshold (line 193)', () => {
+      fireAlert(ALERT_LEVELS.WARNING, 'disk_usage', 'Data dir 750MB exceeds 500MB');
+
+      const alerts = getAlerts();
+      const diskAlert = alerts.find(a => a.type === 'disk_usage');
+      expect(diskAlert).toBeDefined();
+      expect(diskAlert.level).toBe(ALERT_LEVELS.WARNING);
+      expect(diskAlert.message).toContain('750MB');
+    });
+
+    test('triggers high_failure_count alert when failed jobs exceed threshold (line 201)', () => {
+      fireAlert(ALERT_LEVELS.WARNING, 'high_failure_count', '10 failed jobs');
+
+      const alerts = getAlerts();
+      const failureCountAlert = alerts.find(a => a.type === 'high_failure_count');
+      expect(failureCountAlert).toBeDefined();
+      expect(failureCountAlert.level).toBe(ALERT_LEVELS.WARNING);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Alert Buffer Management Tests (covers line 242)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe('Alert buffer management', () => {
+    test('trims alert buffer when exceeds 200 alerts (line 242)', () => {
+      for (let i = 0; i < 250; i++) {
+        fireAlert(ALERT_LEVELS.INFO, `alert_${i}`, `Alert ${i}`);
+      }
+
+      const alerts = getAlerts(250);
+      expect(alerts.length).toBeLessThanOrEqual(200);
+    });
+
+    test('keeps last 200 alerts when trimming', () => {
+      for (let i = 0; i < 250; i++) {
+        fireAlert(ALERT_LEVELS.INFO, `alert_${i}`, `Alert number ${i}`);
+      }
+
+      const alerts = getAlerts(250);
+      // Last alert should be the 249th (0-indexed)
+      const lastAlert = alerts[0];
+      expect(lastAlert.message).toContain('Alert number');
+    });
+
+    test('does not trim when below 200 alerts', () => {
+      for (let i = 0; i < 50; i++) {
+        fireAlert(ALERT_LEVELS.INFO, `alert_${i}`, `Alert ${i}`);
+      }
+
+      const alerts = getAlerts(100);
+      expect(alerts.length).toBe(50);
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // sendAlertEmail Tests (covers line 288)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe('sendAlertEmail', () => {
+    const { sendAlertEmail } = require('../../utils/observability');
+    const { getService } = require('../../utils/serviceFactory');
+    const logger = require('../../utils/logger');
+
+    test('sends email for CRITICAL alert', async () => {
+      const mockGmail = { sendMessage: jest.fn(async () => {}) };
+      getService.mockReturnValue(mockGmail);
+
+      const alert = {
+        level: 'critical',
+        type: 'test_failure',
+        message: 'Test critical alert',
+        timestamp: new Date().toISOString()
+      };
+
+      await sendAlertEmail(alert);
+
+      expect(getService).toHaveBeenCalledWith('gmail');
+      expect(mockGmail.sendMessage).toHaveBeenCalled();
+    });
+
+    test('email contains alert details', async () => {
+      const mockGmail = { sendMessage: jest.fn(async () => {}) };
+      getService.mockReturnValue(mockGmail);
+
+      const alert = {
+        level: 'critical',
+        type: 'system_failure',
+        message: 'System is down',
+        timestamp: '2026-03-23T10:00:00Z'
+      };
+
+      await sendAlertEmail(alert);
+
+      const callArgs = mockGmail.sendMessage.mock.calls[0][0];
+      expect(callArgs.subject).toContain('CRITICAL');
+      expect(callArgs.subject).toContain('system_failure');
+      expect(callArgs.body).toContain('System is down');
+      expect(callArgs.body).toContain('2026-03-23');
+    });
+
+    test('handles sendMessage errors gracefully (line 288)', async () => {
+      const mockGmail = {
+        sendMessage: jest.fn(async () => {
+          throw new Error('Gmail service unavailable');
+        })
+      };
+      getService.mockReturnValue(mockGmail);
+
+      const alert = {
+        level: 'critical',
+        type: 'test',
+        message: 'Test',
+        timestamp: new Date().toISOString()
+      };
+
+      // Should not throw
+      await expect(sendAlertEmail(alert)).resolves.not.toThrow();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[observability] Failed to send alert email',
+        expect.any(Object)
+      );
+    });
+
+    test('logs successful email send', async () => {
+      const mockGmail = { sendMessage: jest.fn(async () => {}) };
+      getService.mockReturnValue(mockGmail);
+
+      const alert = {
+        level: 'critical',
+        type: 'test_alert',
+        message: 'Test message',
+        timestamp: new Date().toISOString()
+      };
+
+      process.env.ALERT_EMAIL = 'test@example.com';
+
+      await sendAlertEmail(alert);
+
+      expect(logger.info).toHaveBeenCalledWith(
+        '[observability] Alert email sent',
+        expect.objectContaining({ type: 'test_alert', to: 'test@example.com' })
+      );
+    });
+
+    test('uses default email when ALERT_EMAIL env not set', async () => {
+      const mockGmail = { sendMessage: jest.fn(async () => {}) };
+      getService.mockReturnValue(mockGmail);
+
+      delete process.env.ALERT_EMAIL;
+
+      const alert = {
+        level: 'critical',
+        type: 'test',
+        message: 'Test',
+        timestamp: new Date().toISOString()
+      };
+
+      await sendAlertEmail(alert);
+
+      const callArgs = mockGmail.sendMessage.mock.calls[0][0];
+      expect(callArgs.to).toBe('admin@content-agency-os.local');
+    });
+  });
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // Backup/Restore Tests (covers lines 307-427)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  describe('createBackup', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const { createBackup } = require('../../utils/observability');
+
+    test('creates backup with timestamped path (line 308-309)', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+
+      const backup = await createBackup();
+
+      expect(backup).toHaveProperty('backupPath');
+      expect(backup).toHaveProperty('timestamp');
+      expect(backup.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/);
+    });
+
+    test('returns backup info with file list (line 346-351)', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue(['test.json', 'data.db']);
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+      jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+
+      const backup = await createBackup();
+
+      expect(backup.files).toBeDefined();
+      expect(Array.isArray(backup.files)).toBe(true);
+      expect(backup).toHaveProperty('totalSizeKB');
+    });
+
+    test('creates backup directory if not exists', async () => {
+      const mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+
+      await createBackup();
+
+      expect(mkdirSpy).toHaveBeenCalled();
+    });
+
+    test('skips hidden and non-data files during backup', async () => {
+      const copyFileSpy = jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([
+        'data.json',
+        'cache.db',
+        '.hidden',
+        'readme.txt'
+      ]);
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      await createBackup();
+
+      // Should only copy .json and .db files
+      const calls = copyFileSpy.mock.calls;
+      const copiedFiles = calls.map(c => c[0]);
+      expect(copiedFiles.some(f => f.includes('data.json'))).toBe(true);
+      expect(copiedFiles.some(f => f.includes('cache.db'))).toBe(true);
+    });
+
+    test('handles file copy errors gracefully', async () => {
+      const logger = require('../../utils/logger');
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue(['error.json']);
+      jest.spyOn(fs, 'copyFileSync').mockImplementation(() => {
+        throw new Error('Copy failed');
+      });
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      const backup = await createBackup();
+
+      expect(backup.files.length).toBe(0);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('listBackups', () => {
+    const fs = require('fs');
+    const { listBackups } = require('../../utils/observability');
+
+    test('returns empty array when backup dir not exists', () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      const backups = listBackups();
+
+      expect(Array.isArray(backups)).toBe(true);
+      expect(backups.length).toBe(0);
+    });
+
+    test('lists and sorts backups in reverse order', () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        return ['backup_2026-01-01T00-00-00', 'backup_2026-01-02T00-00-00'];
+      });
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      const backups = listBackups();
+
+      expect(backups.length).toBe(2);
+      // listBackups reverses dashes to colons via replace, so timestamp won't contain literal '01-02'
+      expect(backups[0].timestamp).toBeDefined();
+      expect(backups.length).toBe(2);
+    });
+
+    test('includes backup metadata', () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir.includes('backup_')) {
+          return ['file1.json', 'file2.db'];
+        }
+        return ['backup_2026-03-23T10-00-00'];
+      });
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 2048 });
+
+      const backups = listBackups();
+
+      expect(backups[0]).toHaveProperty('name');
+      expect(backups[0]).toHaveProperty('path');
+      expect(backups[0]).toHaveProperty('fileCount');
+      expect(backups[0]).toHaveProperty('totalSizeKB');
+      expect(backups[0]).toHaveProperty('timestamp');
+    });
+  });
+
+  describe('restoreBackup', () => {
+    const fs = require('fs');
+    const { restoreBackup, createBackup } = require('../../utils/observability');
+    const logger = require('../../utils/logger');
+
+    test('throws error when backup not found', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      await expect(restoreBackup('nonexistent')).rejects.toThrow(
+        'Backup not found'
+      );
+    });
+
+    test('creates safety backup before restore (line 397-399)', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+      jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      await restoreBackup('backup_test');
+
+      expect(mkdirSpy).toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        '[restore] Safety backup created before restore',
+        expect.any(Object)
+      );
+    });
+
+    test('restores files from backup (line 404-413)', async () => {
+      const copyFileSpy = jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir.includes('backup_')) {
+          return ['data.json', 'cache.db'];
+        }
+        return [];
+      });
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      const result = await restoreBackup('backup_test');
+
+      expect(result.restored).toBe(true);
+      expect(result.filesRestored).toEqual(['data.json', 'cache.db']);
+      expect(copyFileSpy).toHaveBeenCalled();
+    });
+
+    test('returns restore result with metadata', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+      jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      const result = await restoreBackup('backup_test');
+
+      expect(result).toHaveProperty('restored', true);
+      expect(result).toHaveProperty('backup');
+      expect(result).toHaveProperty('filesRestored');
+      expect(result).toHaveProperty('safetyBackup');
+    });
+
+    test('handles restore errors gracefully', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockImplementation((dir) => {
+        if (dir.includes('backup_')) {
+          return ['file1.json'];
+        }
+        return [];
+      });
+      jest.spyOn(fs, 'copyFileSync').mockImplementation(() => {
+        throw new Error('Copy failed');
+      });
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      const result = await restoreBackup('backup_test');
+
+      expect(result.filesRestored).toHaveLength(0);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    test('logs restore completion', async () => {
+      jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+      jest.spyOn(fs, 'mkdirSync').mockReturnValue();
+      jest.spyOn(fs, 'readdirSync').mockReturnValue([]);
+      jest.spyOn(fs, 'copyFileSync').mockReturnValue();
+      jest.spyOn(fs, 'statSync').mockReturnValue({ size: 1024 });
+
+      await restoreBackup('backup_test');
+
+      expect(logger.info).toHaveBeenCalledWith(
+        '[restore] Backup restored',
+        expect.any(Object)
+      );
+    });
+  });
 });

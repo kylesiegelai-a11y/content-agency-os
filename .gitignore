@@ -11,12 +11,15 @@ dashboard/node_modules/
 data/*.json
 data/*.backup.*
 data/*.lock
+data/*.db
+data/deliverables/
+data/.fuse_hidden*
 !data/.gitkeep
 logs/
 tmp/
 
 # Build output
-dashboard/dist/
+dashboard/dist*/
 dashboard/build/
 
 # OS files
