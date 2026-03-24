@@ -5,8 +5,8 @@
  */
 
 const logger = require('../utils/logger');
-const SourceRegistry = require('./sourceRegistry');
-const AcquisitionEngine = require('./acquisitionEngine');
+const SourceRegistry = require('./SourceRegistry');
+const AcquisitionEngine = require('./AcquisitionEngine');
 const { FormSource, GmailSource, CsvImportSource, ReferralSource, MarketplaceSource } = require('./sources');
 
 const MOCK_MODE = process.env.MOCK_MODE === 'true' || process.env.MOCK_MODE === '1';

@@ -2,9 +2,9 @@
  * Acquisition Module - Main Entry Point
  */
 
-const AcquisitionEngine = require('./acquisitionEngine');
+const AcquisitionEngine = require('./AcquisitionEngine');
 const AcquisitionSource = require('./AcquisitionSource');
-const SourceRegistry = require('./sourceRegistry');
+const SourceRegistry = require('./SourceRegistry');
 const { OPPORTUNITY_STATUSES, SOURCE_TYPES, createOpportunity, validateOpportunity } = require('./opportunitySchema');
 const { scoreOpportunity, qualifyOpportunities, DEFAULT_CONFIG } = require('./scoring');
 const { generateDedupeKey, computeSimilarity, dedupeOpportunities } = require('./dedupe');

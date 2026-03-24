@@ -6,7 +6,7 @@ const GmailSource = require('../../acquisition/sources/GmailSource');
 const CsvImportSource = require('../../acquisition/sources/CsvImportSource');
 const ReferralSource = require('../../acquisition/sources/ReferralSource');
 const MarketplaceSource = require('../../acquisition/sources/MarketplaceSource');
-const AcquisitionEngine = require('../../acquisition/acquisitionEngine');
+const AcquisitionEngine = require('../../acquisition/AcquisitionEngine');
 
 // Mock Gmail Service
 class MockGmailService {

@@ -54,7 +54,7 @@ describe('Legacy Path Removal', () => {
 // ============================================================================
 
 const MarketplaceSource = require('../../acquisition/sources/MarketplaceSource');
-const SourceRegistry = require('../../acquisition/sourceRegistry');
+const SourceRegistry = require('../../acquisition/SourceRegistry');
 
 // Mock marketplace service for tests
 class MockMarketplaceService {
@@ -194,7 +194,7 @@ describe('Marketplace Source Optionality', () => {
   });
 
   test('System operates normally with zero marketplace connectors', async () => {
-    const AcquisitionEngine = require('../../acquisition/acquisitionEngine');
+    const AcquisitionEngine = require('../../acquisition/AcquisitionEngine');
     const FormSource = require('../../acquisition/sources/FormSource');
 
     // Registry with only a form source — no marketplace
