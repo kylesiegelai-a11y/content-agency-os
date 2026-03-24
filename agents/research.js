@@ -1,7 +1,9 @@
 /**
  * Research Agent
- * Discovers Upwork opportunities based on agency skills/niches
- * Uses service factory to interact with Upwork API
+ * Discovers opportunities based on agency skills/niches.
+ * Uses the acquisition engine when available, falls back to direct service calls.
+ * NOTE: In production mode, zero opportunities means zero opportunities.
+ * Sample/demo data is never fabricated outside explicit mock mode.
  */
 
 const ApiClient = require('../utils/apiClient');
@@ -58,10 +60,17 @@ async function research(job, context = {}) {
       opportunities = [];
     }
 
-    // If in mock mode or no real results, generate synthetic opportunities for demo
+    // PRODUCTION SAFETY: Never fabricate opportunities.
+    // In mock mode, the mock service already returns test data.
+    // In production, zero results means zero results — reported honestly.
     if (!opportunities || opportunities.length === 0) {
-      logger.info(`[research] No opportunities found, generating sample data for demo`);
-      opportunities = generateSampleOpportunities(job.niches || ['content writing'], 15);
+      const MOCK_MODE = process.env.MOCK_MODE === 'true' || process.env.MOCK_MODE === '1';
+      if (MOCK_MODE) {
+        logger.info(`[research] No opportunities found in mock mode — mock service may be empty`);
+      } else {
+        logger.info(`[research] No opportunities found from source — reporting zero results honestly`);
+      }
+      opportunities = [];
     }
 
     // Use Claude to analyze and rank opportunities
@@ -161,54 +170,6 @@ Analyze these opportunities and provide:
 
     throw error;
   }
-}
-
-/**
- * Generate sample opportunities for demo/mock mode
- * @param {Array} niches - Niches to create opportunities for
- * @param {number} count - Number of opportunities to generate
- * @returns {Array} Sample opportunity objects
- */
-function generateSampleOpportunities(niches, count) {
-  const titles = [
-    'Blog post writing for SaaS startup',
-    'Website copywriting for e-commerce brand',
-    'Technical article writing - DevOps focus',
-    'Long-form content for marketing agency',
-    'Email campaign copywriting',
-    'Product description writing (50+ items)',
-    'SEO-optimized article series',
-    'Case study writing',
-    'White paper development',
-    'Social media content calendar creation',
-    'Newsletter content writing',
-    'Landing page copywriting',
-    'Content outline and research',
-    'Grant writing assistance',
-    'Blog content series (12 articles)'
-  ];
-
-  const opportunities = [];
-  const niche = niches[0] || 'content writing';
-
-  for (let i = 0; i < count; i++) {
-    opportunities.push({
-      id: `upwork_${Date.now()}_${i}`,
-      title: titles[i % titles.length],
-      niche,
-      budget: Math.floor(Math.random() * 3000) + 200,
-      currency: 'USD',
-      duration: ['1-3 months', '1 week', '2-4 weeks', '3-6 months'][Math.floor(Math.random() * 4)],
-      level: ['Entry level', 'Intermediate', 'Expert'][Math.floor(Math.random() * 3)],
-      workType: ['One-time project', 'Ongoing', 'Contract'][Math.floor(Math.random() * 3)],
-      description: `Looking for experienced ${niche} professional for content creation project.`,
-      postedTime: `${Math.floor(Math.random() * 24)} hours ago`,
-      bidsCount: Math.floor(Math.random() * 30),
-      verified: Math.random() > 0.3
-    });
-  }
-
-  return opportunities;
 }
 
 module.exports = research;

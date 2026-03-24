@@ -118,9 +118,14 @@ function getService(serviceName, options = {}) {
         break;
 
       case 'upwork':
-        // Upwork still uses mock in production (no API keys yet)
-        service = new UpworkMock(options);
-        serviceType = 'UpworkMock (no real provider yet)';
+        // PRODUCTION SAFETY: Do not silently use mock in production.
+        // Upwork has no real provider yet — throw a clear error.
+        // Use the acquisition engine's MarketplaceSource for explicit mock-mode handling.
+        throw new Error(
+          'Upwork service is not available in production mode. ' +
+          'No real Upwork API provider is configured. ' +
+          'Use the acquisition engine with MarketplaceSource in mock mode for development.'
+        );
         break;
 
       case 'calendly':

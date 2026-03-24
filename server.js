@@ -17,6 +17,7 @@ const bcrypt = require('bcryptjs');
 const { initializeQueues, closeQueues, MOCK_MODE } = require('./utils/queueConfig');
 const { Orchestrator, JOB_STATES } = require('./orchestrator');
 const { Scheduler } = require('./scheduler');
+const { initializeAcquisition, createAcquisitionRouter } = require('./acquisition');
 
 // Configuration
 const PORT = process.env.PORT || 3001;
@@ -38,6 +39,7 @@ const appState = {
   queues: null,
   orchestrator: null,
   scheduler: null,
+  acquisitionEngine: null,
   config: {
     killSwitch: false,
     agentPauseStates: {},
@@ -1717,7 +1719,9 @@ async function startServer() {
       'niches.json': { niches: {} },
       'ledger.json': { transactions: [], total: 0 },
       'invoices.json': { invoices: [], summary: { totalInvoiced: 0, totalPaid: 0, totalOutstanding: 0 } },
-      'compliance.json': { rateLimits: {}, suppression: { emails: [], domains: [] }, sendLog: [], purgeLog: [], auditLog: [] }
+      'compliance.json': { rateLimits: {}, suppression: { emails: [], domains: [] }, sendLog: [], purgeLog: [], auditLog: [] },
+      'opportunities.json': { items: [] },
+      'acquisition_events.json': { items: [] }
     };
     for (const [fileName, defaultContent] of Object.entries(dataStores)) {
       await storage.initialize(fileName, defaultContent);
@@ -1750,6 +1754,21 @@ async function startServer() {
       agentPauseStates: appState.config.agentPauseStates
     });
     await appState.scheduler.initialize();
+
+    // Initialize acquisition engine
+    console.log('[Server] Initializing acquisition engine...');
+    const serviceFactory = require('./utils/serviceFactory');
+    const { engine: acquisitionEngine } = initializeAcquisition({
+      storage,
+      serviceFactory,
+      scoringConfig: {}
+    });
+    appState.acquisitionEngine = acquisitionEngine;
+
+    // Mount acquisition routes
+    const acquisitionRouter = createAcquisitionRouter(acquisitionEngine, storage, authenticateToken);
+    app.use('/api/acquisition', acquisitionRouter);
+    console.log('[Server] Acquisition engine ready');
 
     // Start server
     const server = app.listen(PORT, () => {
