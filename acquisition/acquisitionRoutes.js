@@ -437,4 +437,4 @@ function createAcquisitionRouter(engine, storage, authMiddleware) {
   return router;
 }
 
-module.exports = createAcquisitionRouter;
+module.exports = { createAcquisitionRouter };
