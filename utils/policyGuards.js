@@ -9,7 +9,8 @@ const { readData } = require('./storage');
 const { preSendCheck } = require('./compliance');
 const logger = require('./logger');
 
-const MOCK_MODE = process.env.MOCK_MODE === 'true';
+// Read live — not cached. Operator may change modes at runtime.
+const IS_MOCK_MODE = () => process.env.MOCK_MODE === 'true';
 
 // ── Configurable policy limits ────────────────────────────────────────
 const POLICY = {
@@ -49,7 +50,7 @@ async function validateEmailSend(input) {
   }
 
   // Send window check
-  if (POLICY.enforceSendWindow && !MOCK_MODE) {
+  if (POLICY.enforceSendWindow && !IS_MOCK_MODE()) {
     const hour = new Date().getHours();
     if (hour < POLICY.sendWindowStart || hour >= POLICY.sendWindowEnd) {
       return { allowed: false, reason: `Outside send window (${POLICY.sendWindowStart}:00-${POLICY.sendWindowEnd}:00)`, check: 'send_window' };

@@ -430,10 +430,12 @@ class Scheduler extends EventEmitter {
   }
 
   /**
-   * Check if global kill switch is enabled
+   * Check if global kill switch is enabled.
+   * Reads live from process.env — the operator API sets this at runtime.
+   * Falls back to config for non-env-based callers.
    */
   _isGlobalKillSwitchEnabled() {
-    return this.config.killSwitch === true;
+    return process.env.KILL_SWITCH === 'true' || this.config.killSwitch === true;
   }
 
   /**

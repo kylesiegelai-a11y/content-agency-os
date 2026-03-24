@@ -185,12 +185,12 @@ class Orchestrator {
       // Terminal state reached (DELIVERED, DEAD_LETTER, etc.)
       job.completedAt = new Date();
       job.completionStatus = 'success';
-      this._persistJob(job);
+      await this._persistJob(job);
       return result;
     }
 
     await this.transitionJob(job, nextState, result);
-    this._persistJob(job);
+    await this._persistJob(job);
 
     return result;
   }
@@ -440,6 +440,11 @@ class Orchestrator {
       job.completedAt = new Date();
       job.completionStatus = 'success';
     }
+
+    // DURABILITY: Persist state BEFORE side-effects (invoice, notification).
+    // If the process crashes after this point, the state transition is safe on
+    // disk and the idempotent side-effects will be retried on next startup.
+    await this._persistJob(job);
 
     // Auto-generate invoice on delivery
     if (nextState === JOB_STATES.DELIVERED) {

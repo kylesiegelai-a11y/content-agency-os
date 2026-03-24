@@ -729,12 +729,14 @@ describe('Observability Module', () => {
         timestamp: new Date().toISOString()
       };
 
-      // Should not throw
+      // Should not throw — executeOperation catches execution errors internally
       await expect(sendAlertEmail(alert)).resolves.not.toThrow();
 
-      expect(logger.warn).toHaveBeenCalledWith(
-        '[observability] Failed to send alert email',
-        expect.any(Object)
+      // Now wrapped in executeOperation, failed sends log via info (not warn)
+      // because executeOperation returns a FAILED status instead of throwing
+      expect(logger.info).toHaveBeenCalledWith(
+        '[observability] Alert email not sent',
+        expect.objectContaining({ status: 'failed' })
       );
     });
 

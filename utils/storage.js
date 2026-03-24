@@ -80,6 +80,7 @@ class Storage {
 
   async write(fileName, data, createBackup = true) {
     const filePath = this.getFilePath(fileName);
+    const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
     try {
       if (createBackup && fs.existsSync(filePath)) {
         const backupPath = `${filePath}.backup.${Date.now()}`;
@@ -90,11 +91,18 @@ class Storage {
           logger.warn(`Failed to create backup for ${fileName}`, backupErr);
         }
       }
-      // Write directly — temp+rename can fail on some mounted filesystems
-      await fsPromises.writeFile(filePath, JSON.stringify(data, null, 2));
+      // Atomic write: serialize to temp file, then rename.
+      // rename() is atomic on POSIX — if the process crashes mid-write,
+      // the original file is untouched. The temp file is PID-scoped to
+      // avoid collisions if multiple processes somehow share the data dir.
+      const json = JSON.stringify(data, null, 2);
+      await fsPromises.writeFile(tmpPath, json);
+      await fsPromises.rename(tmpPath, filePath);
       logger.debug(`Updated file: ${fileName}`);
       return true;
     } catch (err) {
+      // Clean up temp file on failure
+      try { await fsPromises.unlink(tmpPath); } catch (_) { /* ok */ }
       logger.error(`Error writing ${fileName}`, err);
       throw err;
     }

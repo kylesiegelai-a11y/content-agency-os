@@ -13,7 +13,9 @@ const { readData, writeData } = require('./storage');
 const logger = require('./logger');
 
 const OPERATIONS_FILE = 'operations.json';
-const DRY_RUN = process.env.DRY_RUN === 'true' || process.env.SHADOW_MODE === 'true';
+// Read live on every call — NOT cached at module load.
+// The operator can toggle these at runtime via API.
+const IS_DRY_RUN = () => process.env.DRY_RUN === 'true' || process.env.SHADOW_MODE === 'true';
 const KILL_SWITCH = () => process.env.KILL_SWITCH === 'true';
 
 /**
@@ -155,8 +157,8 @@ async function executeOperation(params) {
     }
   }
 
-  // 4. Dry run check
-  if (DRY_RUN) {
+  // 4. Dry run check (read live — operator may toggle at runtime)
+  if (IS_DRY_RUN()) {
     const record = createOperationRecord({
       operationId, idempotencyKey, actionType, jobId, target, qualifier,
       input, status: OP_STATUS.DRY_RUN, startedAt,
@@ -204,7 +206,7 @@ function createOperationRecord({ operationId, idempotencyKey, actionType, jobId,
     result: result || null,
     startedAt,
     completedAt: null,
-    dryRun: DRY_RUN
+    dryRun: IS_DRY_RUN()
   };
 }
 
@@ -303,5 +305,5 @@ module.exports = {
   getDailySummary,
   getJobOperations,
   OP_STATUS,
-  DRY_RUN
+  IS_DRY_RUN
 };

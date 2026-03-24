@@ -29,7 +29,7 @@ const {
   getDailySummary,
   getJobOperations,
   OP_STATUS,
-  DRY_RUN
+  IS_DRY_RUN
 } = require('../../utils/operationLog');
 
 const {
@@ -222,19 +222,72 @@ describe('Autonomy Safety Infrastructure', () => {
   });
 
   describe('Dry Run Mode', () => {
-    test('Should record operations even in dry-run conditions', async () => {
-      // DRY_RUN is a module-level constant, so we test the status field instead
+    test('Should block execution when dry-run is toggled on at runtime', async () => {
+      // IS_DRY_RUN is now a function, so runtime toggles work
+      process.env.DRY_RUN = 'true';
+
+      let executed = false;
       const result = await executeOperation({
         actionType: 'test_dry_run',
+        jobId: `test_${uuidv4().slice(0, 8)}`,
+        target: 'test@example.com',
+        input: {},
+        execute: async () => {
+          executed = true;
+          return { success: true };
+        }
+      });
+
+      expect(result.status).toBe(OP_STATUS.DRY_RUN);
+      expect(executed).toBe(false);
+      expect(result.result.reason).toContain('Dry run');
+
+      delete process.env.DRY_RUN;
+    });
+
+    test('Should execute normally after dry-run is toggled off', async () => {
+      process.env.DRY_RUN = 'true';
+
+      // First call — should be dry run
+      const dryResult = await executeOperation({
+        actionType: 'test_dry_toggle',
+        jobId: `test_${uuidv4().slice(0, 8)}`,
+        target: 'test@example.com',
+        input: {},
+        execute: async () => ({ success: true })
+      });
+      expect(dryResult.status).toBe(OP_STATUS.DRY_RUN);
+
+      // Toggle off
+      process.env.DRY_RUN = 'false';
+
+      // Second call — should execute
+      const liveResult = await executeOperation({
+        actionType: 'test_dry_toggle_live',
+        jobId: `test_${uuidv4().slice(0, 8)}`,
+        target: 'test@example.com',
+        input: {},
+        execute: async () => ({ success: true })
+      });
+      expect(liveResult.status).toBe(OP_STATUS.COMPLETED);
+
+      delete process.env.DRY_RUN;
+    });
+
+    test('Should treat SHADOW_MODE=true as dry run', async () => {
+      process.env.SHADOW_MODE = 'true';
+
+      const result = await executeOperation({
+        actionType: 'test_shadow',
         jobId: `test_${uuidv4().slice(0, 8)}`,
         target: 'test@example.com',
         input: {},
         execute: async () => ({ success: true })
       });
 
-      // Operation should be recorded
-      expect(result.operationId).toBeDefined();
-      expect(result.status).toBeDefined();
+      expect(result.status).toBe(OP_STATUS.DRY_RUN);
+
+      delete process.env.SHADOW_MODE;
     });
   });
 
@@ -592,6 +645,59 @@ describe('Autonomy Safety Infrastructure', () => {
       expect(result.result.apiKey).toBe('[redacted]');
       expect(result.result.password).toBe('[redacted]');
       expect(result.result.normalField).toBe('visible_value');
+    });
+  });
+
+  describe('Atomic Storage Writes', () => {
+    test('Should write data and read it back intact', async () => {
+      const testData = { test: true, items: [1, 2, 3], nested: { key: 'value' } };
+      await writeData('atomic_test.json', testData);
+
+      const read = await readData('atomic_test.json');
+      expect(read.test).toBe(true);
+      expect(read.items).toEqual([1, 2, 3]);
+      expect(read.nested.key).toBe('value');
+
+      // Cleanup
+      const testDir = path.join(__dirname, '../../data_test');
+      const testFile = path.join(testDir, 'atomic_test.json');
+      if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+    });
+
+    test('Should not leave temp files after successful write', async () => {
+      await writeData('clean_write_test.json', { clean: true });
+
+      const testDir = path.join(__dirname, '../../data_test');
+      const tmpFiles = fs.readdirSync(testDir).filter(f => f.includes('.tmp.'));
+      expect(tmpFiles.length).toBe(0);
+
+      // Cleanup
+      const testFile = path.join(testDir, 'clean_write_test.json');
+      if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+    });
+  });
+
+  describe('IS_DRY_RUN is a live function', () => {
+    test('IS_DRY_RUN should be a function, not a cached boolean', () => {
+      expect(typeof IS_DRY_RUN).toBe('function');
+    });
+
+    test('IS_DRY_RUN should reflect runtime env changes', () => {
+      const originalDryRun = process.env.DRY_RUN;
+
+      process.env.DRY_RUN = 'true';
+      expect(IS_DRY_RUN()).toBe(true);
+
+      process.env.DRY_RUN = 'false';
+      expect(IS_DRY_RUN()).toBe(false);
+
+      delete process.env.DRY_RUN;
+      expect(IS_DRY_RUN()).toBe(false);
+
+      // Restore
+      if (originalDryRun !== undefined) {
+        process.env.DRY_RUN = originalDryRun;
+      }
     });
   });
 });

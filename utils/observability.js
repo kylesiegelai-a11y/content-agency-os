@@ -255,35 +255,52 @@ function fireAlert(level, type, message) {
 
 /**
  * Send a critical alert email via Gmail service.
+ * Routed through executeOperation for kill-switch, dry-run, dedup, and audit.
  */
 async function sendAlertEmail(alert) {
   try {
+    const { executeOperation } = require('./operationLog');
     const serviceFactory = require('./serviceFactory');
     const gmail = serviceFactory.getService('gmail');
 
     const alertEmail = process.env.ALERT_EMAIL || 'admin@content-agency-os.local';
+    const alertBody = [
+      `Content Agency OS Alert`,
+      `========================`,
+      ``,
+      `Level: ${alert.level.toUpperCase()}`,
+      `Type: ${alert.type}`,
+      `Time: ${alert.timestamp}`,
+      ``,
+      `Message:`,
+      alert.message,
+      ``,
+      `---`,
+      `This is an automated alert from Content Agency OS.`
+    ].join('\n');
 
-    await gmail.sendMessage({
-      to: alertEmail,
-      from: 'alerts@content-agency-os.local',
-      subject: `[ALERT:${alert.level.toUpperCase()}] ${alert.type}`,
-      body: [
-        `Content Agency OS Alert`,
-        `========================`,
-        ``,
-        `Level: ${alert.level.toUpperCase()}`,
-        `Type: ${alert.type}`,
-        `Time: ${alert.timestamp}`,
-        ``,
-        `Message:`,
-        alert.message,
-        ``,
-        `---`,
-        `This is an automated alert from Content Agency OS.`
-      ].join('\n')
+    const result = await executeOperation({
+      actionType: 'alert_email',
+      jobId: alert.jobId || 'system',
+      target: alertEmail,
+      qualifier: `${alert.type}:${alert.timestamp}`,
+      input: { alertType: alert.type, level: alert.level, to: alertEmail },
+      execute: async () => {
+        await gmail.sendMessage({
+          to: alertEmail,
+          from: 'alerts@content-agency-os.local',
+          subject: `[ALERT:${alert.level.toUpperCase()}] ${alert.type}`,
+          body: alertBody
+        });
+        return { sent: true, to: alertEmail };
+      }
     });
 
-    logger.info('[observability] Alert email sent', { type: alert.type, to: alertEmail });
+    if (result.status === 'completed') {
+      logger.info('[observability] Alert email sent', { type: alert.type, to: alertEmail });
+    } else {
+      logger.info('[observability] Alert email not sent', { type: alert.type, status: result.status, reason: result.result?.reason });
+    }
   } catch (err) {
     logger.warn('[observability] Failed to send alert email', { error: err.message });
   }
