@@ -1,7 +1,7 @@
 {
   "name": "content-agency-os",
   "version": "1.0.0",
-  "description": "Production-ready Content Agency OS with job orchestration, scheduling, and queue management",
+  "description": "Content Agency OS — automated content creation and agency management system (prototype/demo)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -14,7 +14,6 @@
     "migrate:sqlite": "node scripts/migrateToSqlite.js",
     "dev:sqlite": "USE_SQLITE=true MOCK_MODE=true nodemon server.js",
     "preflight": "bash scripts/preflight.sh",
-    "kill-switch": "curl -X POST http://localhost:3001/api/settings/kill-switch -H 'Authorization: Bearer mock-jwt-token-for-development' -H 'Content-Type: application/json' -d '{\"enabled\": true}'"
   },
   "keywords": [
     "content-agency",
@@ -31,7 +30,6 @@
     "bcryptjs": "^2.4.3",
     "bull": "^4.11.5",
     "cors": "^2.8.5",
-    "cron": "^3.0.3",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "google-auth-library": "^10.6.2",

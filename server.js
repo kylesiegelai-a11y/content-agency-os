@@ -22,18 +22,26 @@ const { initializeAcquisition, createAcquisitionRouter } = require('./acquisitio
 // Configuration
 const PORT = process.env.PORT || 3001;
 
-// --- MOCK-ONLY SECURITY RELAXATIONS ---
-// Authentication is handled by utils/auth.js:
-//   MOCK_MODE  → mock-dev-secret + mock admin token bypass
-//   PRODUCTION → JWT_SECRET required, no mock bypass, API key support
-const { AuthManager, authMiddleware: hardenedAuthMiddleware } = require('./utils/auth');
-const crypto = require('crypto');
-const JWT_SECRET = process.env.JWT_SECRET || (MOCK_MODE ? crypto.randomBytes(32).toString('hex') : null);
+// --- AUTHENTICATION ---
+// Single source of truth: utils/auth.js owns JWT_SECRET, AuthManager, and middleware.
+//   MOCK_MODE  → random per-process secret, no external config needed
+//   PRODUCTION → JWT_SECRET env var required, no mock bypass, API key support
+const { AuthManager, authMiddleware: hardenedAuthMiddleware, JWT_SECRET } = require('./utils/auth');
 
 if (!MOCK_MODE && !JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required in production mode');
 }
 
+// ── Production safety checks ─────────────────────────────────────────
+if (!MOCK_MODE) {
+  const INSECURE_JWT_SECRETS = ['dev-secret-key-change-in-production', 'CHANGE_ME_BEFORE_PRODUCTION_USE', 'secret', 'jwt-secret'];
+  if (INSECURE_JWT_SECRETS.includes(process.env.JWT_SECRET)) {
+    throw new Error('FATAL: Using an insecure default JWT_SECRET in production. Generate a strong random secret.');
+  }
+  if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin123') {
+    console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
+  }
+}
 // Application state
 const appState = {
   queues: null,
@@ -119,6 +127,16 @@ function loginRateLimiter(req, res, next) {
   next();
 }
 
+// ── Production safety checks ─────────────────────────────────────────
+if (!MOCK_MODE) {
+  const INSECURE_JWT_SECRETS = ['dev-secret-key-change-in-production', 'CHANGE_ME_BEFORE_PRODUCTION_USE', 'secret', 'jwt-secret'];
+  if (INSECURE_JWT_SECRETS.includes(process.env.JWT_SECRET)) {
+    throw new Error('FATAL: Using an insecure default JWT_SECRET in production. Generate a strong random secret.');
+  }
+  if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin123') {
+    console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
+  }
+}
 // ============================================================================
 // AUTH ROUTES
 // ============================================================================
@@ -1670,6 +1688,16 @@ if (fs.existsSync(dashboardDist)) {
   console.warn('[Server] WARNING: dashboard/dist not found. Run "npm run build" to build the dashboard.');
 }
 
+// ── Production safety checks ─────────────────────────────────────────
+if (!MOCK_MODE) {
+  const INSECURE_JWT_SECRETS = ['dev-secret-key-change-in-production', 'CHANGE_ME_BEFORE_PRODUCTION_USE', 'secret', 'jwt-secret'];
+  if (INSECURE_JWT_SECRETS.includes(process.env.JWT_SECRET)) {
+    throw new Error('FATAL: Using an insecure default JWT_SECRET in production. Generate a strong random secret.');
+  }
+  if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin123') {
+    console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
+  }
+}
 // ============================================================================
 // ERROR HANDLING MIDDLEWARE
 // ============================================================================
@@ -1824,9 +1852,29 @@ async function startServer() {
   }
 }
 
+// ── Production safety checks ─────────────────────────────────────────
+if (!MOCK_MODE) {
+  const INSECURE_JWT_SECRETS = ['dev-secret-key-change-in-production', 'CHANGE_ME_BEFORE_PRODUCTION_USE', 'secret', 'jwt-secret'];
+  if (INSECURE_JWT_SECRETS.includes(process.env.JWT_SECRET)) {
+    throw new Error('FATAL: Using an insecure default JWT_SECRET in production. Generate a strong random secret.');
+  }
+  if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin123') {
+    console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
+  }
+}
 // Start the server
 if (require.main === module) {
   startServer();
 }
 
+// ── Production safety checks ─────────────────────────────────────────
+if (!MOCK_MODE) {
+  const INSECURE_JWT_SECRETS = ['dev-secret-key-change-in-production', 'CHANGE_ME_BEFORE_PRODUCTION_USE', 'secret', 'jwt-secret'];
+  if (INSECURE_JWT_SECRETS.includes(process.env.JWT_SECRET)) {
+    throw new Error('FATAL: Using an insecure default JWT_SECRET in production. Generate a strong random secret.');
+  }
+  if (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD === 'admin123') {
+    console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
+  }
+}
 module.exports = { app, appState };

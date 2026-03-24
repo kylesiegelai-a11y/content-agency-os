@@ -21,10 +21,14 @@ tmp/
 # Build output
 dashboard/dist*/
 dashboard/build/
+dashboard/vite.config.js.timestamp-*
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Git artifacts
+FETCH_HEAD
 
 # IDE
 .vscode/

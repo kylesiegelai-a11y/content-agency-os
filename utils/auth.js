@@ -270,5 +270,6 @@ module.exports = {
   authMiddleware,
   optionalAuthMiddleware,
   MOCK_MODE,
-  API_KEY_PREFIX
+  API_KEY_PREFIX,
+  JWT_SECRET
 };
