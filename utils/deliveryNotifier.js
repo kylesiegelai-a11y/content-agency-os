@@ -63,7 +63,7 @@ async function notifyClientDelivery(job, deliveryResults = []) {
     brand.website ? brand.website : ''
   ].join('\n');
 
-  // Suppression check — don't notify suppressed contacts
+  // Suppression check
   try {
     const suppression = await isSuppressed(client.email);
     if (suppression.suppressed) {
@@ -74,42 +74,39 @@ async function notifyClientDelivery(job, deliveryResults = []) {
       return { sent: false, reason: 'suppressed' };
     }
   } catch (suppErr) {
-    // Non-blocking — proceed with send if suppression check fails
     logger.warn('[deliveryNotifier] Suppression check failed, proceeding', { error: suppErr.message });
   }
 
-  try {
-    const gmail = serviceFactory.getService('gmail');
+  const { executeOperation } = require('./operationLog');
+  const { validateNotification } = require('./policyGuards');
+  const jobId = job.id || job.jobId;
 
-    const result = await gmail.sendMessage({
-      to: client.email,
-      from: `delivery@${brand.companyName.toLowerCase().replace(/\s+/g, '')}.com`,
-      subject,
-      body
-    });
+  const opResult = await executeOperation({
+    actionType: 'delivery_notification',
+    jobId,
+    target: client.email,
+    qualifier: 'delivery',
+    input: { clientEmail: client.email, subject, jobId },
+    validate: (input) => validateNotification(input),
+    execute: async () => {
+      const gmail = serviceFactory.getService('gmail');
+      const result = await gmail.sendMessage({
+        to: client.email,
+        from: `delivery@${brand.companyName.toLowerCase().replace(/\s+/g, '')}.com`,
+        subject,
+        body
+      });
+      try { await recordSend(client.email); } catch (_) { /* non-blocking */ }
+      return { sent: true, messageId: result.id, to: client.email, subject };
+    }
+  });
 
-    // Record send for rate-limit tracking
-    try { await recordSend(client.email); } catch (_) { /* non-blocking */ }
-
-    logger.info('[deliveryNotifier] Notification sent', {
-      jobId: job.id || job.jobId,
-      to: client.email,
-      messageId: result.id
-    });
-
-    return {
-      sent: true,
-      messageId: result.id,
-      to: client.email,
-      subject
-    };
-  } catch (err) {
-    logger.warn('[deliveryNotifier] Failed to send notification', {
-      jobId: job.id || job.jobId,
-      to: client.email,
-      error: err.message
-    });
-    return { sent: false, error: err.message };
+  if (opResult.status === 'completed') {
+    logger.info('[deliveryNotifier] Notification sent', { jobId, to: client.email });
+    return opResult.result;
+  } else {
+    logger.info('[deliveryNotifier] Notification not sent', { jobId, status: opResult.status, reason: opResult.result?.reason });
+    return { sent: false, reason: opResult.result?.reason || opResult.status, operationId: opResult.operationId };
   }
 }
 

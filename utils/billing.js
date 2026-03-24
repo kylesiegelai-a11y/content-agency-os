@@ -38,10 +38,26 @@ const DEFAULT_PRICING = {
 // ── Invoice generation ──────────────────────────────────────────────
 
 /**
+ * Read all invoices from storage
+ */
+async function readInvoices() {
+  const data = await readData('invoices.json');
+  return (data && data.invoices) || [];
+}
+
+/**
  * Generate an invoice for a delivered job.
  * Called automatically when a job reaches DELIVERED state.
  */
 async function generateInvoice(job) {
+  // Idempotency: check if invoice already exists for this job
+  const existingInvoices = await readInvoices();
+  const existingForJob = existingInvoices.find(inv => inv.jobId === job.id && inv.status !== 'cancelled');
+  if (existingForJob) {
+    logger.info('[billing] Invoice already exists for job, skipping duplicate', { jobId: job.id, invoiceId: existingForJob.id });
+    return existingForJob;
+  }
+
   const invoiceId = `inv_${uuidv4().slice(0, 8)}`;
   const now = new Date();
   const dueDate = new Date(now);

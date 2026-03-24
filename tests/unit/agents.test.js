@@ -1028,8 +1028,8 @@ describe('Agent Modules - Real Behavioral Tests', () => {
 
       const result = await coldOutreach(job);
 
-      // Status should be either 'draft', 'sent', or 'blocked'
-      expect(['draft', 'sent', 'blocked']).toContain(result.status);
+      // Status should be one of the expected operation statuses
+      expect(['draft', 'sent', 'blocked', 'send_failed', 'dry_run', 'duplicate_prevented']).toContain(result.status);
 
       // If blocked, should have compliance information
       if (result.status === 'blocked') {

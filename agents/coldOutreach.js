@@ -132,18 +132,19 @@ EMAIL:
       usage: result.usage
     };
 
-    // Compliance pre-send check (suppression list + rate limits)
+        // Use operation log for idempotent, auditable send
     if (job.sendImmediately && recipient.email) {
-      const complianceCheck = await preSendCheck(recipient.email);
+      const { executeOperation } = require('../utils/operationLog');
+      const { validateEmailSend } = require('../utils/policyGuards');
 
-      if (!complianceCheck.allowed) {
-        outreachData.status = 'blocked';
-        outreachData.complianceReason = complianceCheck.reason;
-        outreachData.complianceCheck = complianceCheck.check;
-        logger.warn(`[coldOutreach] Send blocked by compliance for job ${jobId}: ${complianceCheck.reason}`);
-      } else {
-        // Compliance passed — send email via Gmail service
-        try {
+      const opResult = await executeOperation({
+        actionType: 'cold_outreach_email',
+        jobId,
+        target: recipient.email,
+        qualifier: 'initial',
+        input: { recipientEmail: recipient.email, company: recipient.company, subject },
+        validate: (input) => validateEmailSend({ recipientEmail: input.recipientEmail, jobId }),
+        execute: async () => {
           const gmailService = serviceFactory.getService('gmail');
           const sendResult = await gmailService.sendEmail({
             to: recipient.email,
@@ -151,19 +152,31 @@ EMAIL:
             body,
             isHtml: false
           });
-
-          outreachData.status = 'sent';
-          outreachData.sendTime = new Date().toISOString();
-          outreachData.messageId = sendResult?.messageId;
-
-          // Record the send for rate-limit tracking
           await recordSend(recipient.email);
-
-          logger.info(`[coldOutreach] Email sent for job ${jobId} to ${recipient.email}`);
-        } catch (emailError) {
-          logger.warn(`[coldOutreach] Failed to send email: ${emailError.message}`);
-          outreachData.sendError = emailError.message;
+          return { messageId: sendResult?.messageId, sent: true };
         }
+      });
+
+      if (opResult.status === 'completed') {
+        outreachData.status = 'sent';
+        outreachData.sendTime = opResult.completedAt;
+        outreachData.messageId = opResult.result?.messageId;
+        outreachData.operationId = opResult.operationId;
+      } else if (opResult.status === 'blocked' || opResult.status === 'killed') {
+        outreachData.status = 'blocked';
+        outreachData.complianceReason = opResult.result?.reason;
+        outreachData.operationId = opResult.operationId;
+      } else if (opResult.status === 'duplicate') {
+        outreachData.status = 'duplicate_prevented';
+        outreachData.operationId = opResult.operationId;
+        logger.info(`[coldOutreach] Duplicate send prevented for job ${jobId}`);
+      } else if (opResult.status === 'dry_run') {
+        outreachData.status = 'dry_run';
+        outreachData.operationId = opResult.operationId;
+      } else {
+        outreachData.status = 'send_failed';
+        outreachData.sendError = opResult.result?.error;
+        outreachData.operationId = opResult.operationId;
       }
     }
 

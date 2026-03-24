@@ -42,6 +42,8 @@ if (!MOCK_MODE) {
     console.warn('[SECURITY] WARNING: ADMIN_PASSWORD is weak or unset. Run: node scripts/initPassword.js');
   }
 }
+
+
 // Application state
 const appState = {
   queues: null,
@@ -1795,7 +1797,85 @@ async function startServer() {
     app.use('/api/acquisition', acquisitionRouter);
     console.log('[Server] Acquisition engine ready');
 
-    // 404 handler — must be last, after all routes are mounted
+    // ============================================================================
+// OPERATOR DASHBOARD — Autonomy visibility
+// ============================================================================
+
+/**
+ * GET /api/operator/daily-summary
+ * Operator daily summary of all system activity
+ */
+app.get('/api/operator/daily-summary', authenticateToken, async (req, res) => {
+  try {
+    const { generateDailySummary } = require('./utils/dailySummary');
+    const date = req.query.date || null;
+    const summary = await generateDailySummary(date);
+    res.json({ success: true, summary });
+  } catch (error) {
+    console.error('[API] Daily summary error:', error.message);
+    res.status(500).json({ error: 'Failed to generate daily summary' });
+  }
+});
+
+/**
+ * GET /api/operator/operations
+ * Recent operations log (audit trail)
+ */
+app.get('/api/operator/operations', authenticateToken, async (req, res) => {
+  try {
+    const { readData } = require('./utils/storage');
+    const data = await readData('operations.json');
+    const ops = (data && data.operations) || [];
+    const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+    const recent = ops.slice(-limit).reverse();
+    res.json({ success: true, operations: recent, total: ops.length });
+  } catch (error) {
+    console.error('[API] Operations log error:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve operations' });
+  }
+});
+
+/**
+ * GET /api/operator/job/:jobId/operations
+ * Operations audit trail for a specific job
+ */
+app.get('/api/operator/job/:jobId/operations', authenticateToken, async (req, res) => {
+  try {
+    const { getJobOperations } = require('./utils/operationLog');
+    const ops = await getJobOperations(req.params.jobId);
+    res.json({ success: true, operations: ops });
+  } catch (error) {
+    console.error('[API] Job operations error:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve job operations' });
+  }
+});
+
+/**
+ * POST /api/operator/kill-switch
+ * Toggle global kill switch for all external actions
+ */
+app.post('/api/operator/kill-switch', authenticateToken, async (req, res) => {
+  const { enabled } = req.body;
+  process.env.KILL_SWITCH = enabled ? 'true' : 'false';
+  // Also update appState for scheduler
+  appState.config.killSwitch = !!enabled;
+  console.log(`[OPERATOR] Kill switch ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  res.json({ success: true, killSwitch: !!enabled });
+});
+
+/**
+ * POST /api/operator/dry-run
+ * Toggle dry-run/shadow mode
+ */
+app.post('/api/operator/dry-run', authenticateToken, async (req, res) => {
+  const { enabled } = req.body;
+  process.env.DRY_RUN = enabled ? 'true' : 'false';
+  console.log(`[OPERATOR] Dry-run mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  res.json({ success: true, dryRun: !!enabled });
+});
+
+
+// 404 handler — must be last, after all routes are mounted
     app.use((req, res) => {
       res.status(404).json({ error: 'Not found' });
     });

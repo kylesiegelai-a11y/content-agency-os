@@ -13,7 +13,7 @@
     "build": "npm run dashboard:install && npm run dashboard:build",
     "migrate:sqlite": "node scripts/migrateToSqlite.js",
     "dev:sqlite": "USE_SQLITE=true MOCK_MODE=true nodemon server.js",
-    "preflight": "bash scripts/preflight.sh",
+    "preflight": "bash scripts/preflight.sh"
   },
   "keywords": [
     "content-agency",

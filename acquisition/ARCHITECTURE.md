@@ -1,5 +1,7 @@
 # Acquisition Engine Architecture
 
+> This document describes the acquisition engine subsystem. For the full project overview, see the root [README.md](../README.md).
+
 ## Why Source-Agnostic Acquisition
 
 The original system was built around a single acquisition channel (Upwork), with mock data silently substituted when no real results were available. This created several problems:
@@ -126,10 +128,15 @@ Review decisions are recorded with timestamps in the opportunity metadata.
 | GET | /api/acquisition/sources | Source health status |
 | GET | /api/acquisition/metrics | Acquisition metrics |
 
+## File Naming Convention
+
+Files that export a **class** use PascalCase (e.g., `AcquisitionEngine.js`, `SourceRegistry.js`, `AcquisitionSource.js`). Files that export **functions or config objects** use camelCase (e.g., `acquisitionRoutes.js`, `setup.js`, `scoring.js`, `dedupe.js`). This ensures imports match file names on case-sensitive filesystems (Linux CI).
+
 ## Testing
 
 Acquisition tests are in:
 - `tests/unit/acquisition-core.test.js` — schema, registry, scoring, dedupe (72 tests)
 - `tests/unit/acquisition-sources.test.js` — all 5 sources, engine integration, production safeguards (64 tests)
+- `tests/unit/acquisition-cleanup.test.js` — legacy removal, production safety, source status, single-source-of-truth (18 tests)
 
 Run with: `npx jest tests/unit/acquisition`

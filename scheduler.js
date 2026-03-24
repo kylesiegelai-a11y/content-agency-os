@@ -355,10 +355,12 @@ class Scheduler extends EventEmitter {
   }
 
   /**
-   * Identify new prospects (mock implementation)
+   * Identify new prospects (demo stub — returns sample data)
+   * STUB: Returns demo data. Replace with real database/API queries for production.
    */
   async _identifyProspects() {
-    // In production, this would query a database or API
+    const logger = require('./utils/logger');
+    logger.debug('[Scheduler] Using demo data for _identifyProspects (MOCK_MODE or stub)');
     return [
       {
         name: 'Tech Startup ABC',
@@ -370,10 +372,12 @@ class Scheduler extends EventEmitter {
   }
 
   /**
-   * Find inactive clients (mock implementation)
+   * Find inactive clients (demo stub — returns sample data)
+   * STUB: Returns demo data. Replace with real database/API queries for production.
    */
   async _findInactiveClients() {
-    // In production, this would query CRM or database
+    const logger = require('./utils/logger');
+    logger.debug('[Scheduler] Using demo data for _findInactiveClients (MOCK_MODE or stub)');
     return [
       {
         clientId: 'client-123',
@@ -384,10 +388,12 @@ class Scheduler extends EventEmitter {
   }
 
   /**
-   * Evaluate new niches (mock implementation)
+   * Evaluate new niches (demo stub — returns sample data)
+   * STUB: Returns demo data. Replace with real database/API queries for production.
    */
   async _evaluateNewNiches() {
-    // In production, this would analyze market data
+    const logger = require('./utils/logger');
+    logger.debug('[Scheduler] Using demo data for _evaluateNewNiches (MOCK_MODE or stub)');
     return [
       {
         niche: 'AI-powered Education',
@@ -399,17 +405,22 @@ class Scheduler extends EventEmitter {
   }
 
   /**
-   * Fetch Gmail messages (mock implementation)
+   * Fetch Gmail messages (demo stub — returns sample data)
+   * STUB: Returns demo data. Replace with real database/API queries for production.
    */
   async _fetchGmailMessages() {
-    // In production, this would connect to Gmail API
+    const logger = require('./utils/logger');
+    logger.debug('[Scheduler] Using demo data for _fetchGmailMessages (MOCK_MODE or stub)');
     return [];
   }
 
   /**
-   * Generate accounting summary (mock implementation)
+   * Generate accounting summary (demo stub — returns sample data)
+   * STUB: Returns demo data. Replace with real database/API queries for production.
    */
   async _generateAccountingSummary() {
+    const logger = require('./utils/logger');
+    logger.debug('[Scheduler] Using demo data for _generateAccountingSummary (MOCK_MODE or stub)');
     return {
       dailyRevenue: 0,
       pendingInvoices: 0,
